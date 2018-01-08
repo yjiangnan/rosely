@@ -25,7 +25,7 @@ When many replicates are available and each construct does not exist in all repl
 
 
 ## Installation
-Simply copy the folder in any directory. When using, add the directory to the path. For example, I have rosely under /scripts folder:
+Simply copy the folder in any directory. When using, add the directory to the path. For example, I have `rosely` under `rudolphLab/scripts` folder, the following codes imports all methods in `rosely`:
 
     import sys
     if 'rudolphLab/scripts' not in sys.path: sys.path.insert(0, '/Users/jiangnan/Documents/rudolphLab/scripts')
