@@ -1,7 +1,7 @@
 # rosely
 ### Robust and sensitive tools for high-throughput data analysis
 
-rosely mainly implement the following tools:
+`rosely` mainly implements the following tools:
 ### 1. Classes for reading and normalizing data and for results
 `ReadCounts` is a class for reading excel and text files containing read counts for each gene/constructs in each sample. It implements data normalization (to bring different samples to the same level) by either a specific control gene/construct, or the median of all data, or a quantile (1-9) of all data around the median, or a list of control genes/constructs.
 
