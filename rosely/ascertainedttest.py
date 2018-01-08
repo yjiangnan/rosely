@@ -1,7 +1,7 @@
 '''
-This module implements commonness-moderated t-test (Welch test) that uses the likelihood (commonness)
-of variances compared to the lowess mean of all variances to calculate ( by weighted mean) the moderated 
-variances and then augmented z-scores. 
+This module implements ascertained t-test (Welch test) that uses the similarity of genes/constructs in the same 
+experimental group to reduce the uncertainty of the variance of each gene/construct in an empirical Bayesian approach. 
+The reduced uncertainty is converted back to a number for degrees of freedom to be compatible with conventional statistics. 
 
 Created on Jun 13, 2017
 
