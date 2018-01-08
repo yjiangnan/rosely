@@ -32,3 +32,6 @@ Simply copy the folder in any directory. When using, add the directory to the pa
     from rosely import *
 
 Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/jcrotinger/pyloess for python3 support.
+
+Additionally, `rosely` depends on the following python packages:
+`numpy scipy pandas matplotlib sklearn`
