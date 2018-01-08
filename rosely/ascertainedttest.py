@@ -26,7 +26,11 @@ def ttest(data, idxes, controls=None, paired=False, equalV=False):
     ctrls = controls; minn = 2
     if controls is None: ctrls = data.keys()
     for idx in idxes:
-        ms[idx] = np.mean([np.mean(data[gene][idx]) for gene in data if len(data[gene][idx]) and gene in ctrls])
+        allms = [np.mean(data[gene][idx]) for gene in data if len(data[gene][idx]) and gene in ctrls]
+        if controls is None: 
+            ms[idx] = np.mean(sorted(allms[len(allms)//3 : len(allms)//3*2]))
+        else:
+            ms[idx] = np.mean(sorted(allms[len(allms)//5 : len(allms)//5*4]))
         pvals[idx] = {}; zs[idx] = {}
     if paired:
         for i in range(len(idxes[:-1])):
@@ -34,7 +38,7 @@ def ttest(data, idxes, controls=None, paired=False, equalV=False):
             mvns[idx0] = {}
             for gene in data:
                 d = np.array(data[gene][idx1]) - data[gene][idx0] - (ms[idx1] - ms[idx0])
-                mvns[idx][gene] = [np.mean(d), np.var(d, ddof=1), len(d)]
+                mvns[idx0][gene] = [np.mean(d), np.var(d, ddof=1), len(d)]
         for idx in idxes[:-1]:
             for gene in data:
                 m, v, n = mvns[idx][gene]
@@ -86,25 +90,25 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=Fal
     if debug is True, return an additional dict containing most intermediate variables.
     """
     vbs = {}
-    pvals = {}; zs = {}; pops = {}
+    pvals = {}; zs = {}; pops = {}; dxs = {}
     tps, _, mvns = ttest(data, idxes, controls, paired, equalV)
-    mns = [np.nanmean([mvns[idx][gene][2] for gene in mvns[idx]]) for idx in idxes]
+    mns = [np.nanmean([mvns[idx][gene][2] for gene in mvns[idx]]) for idx in idxes[:len(idxes)-paired]]
     if len(idxes) == 2:
-        _, _, pops[0] = neup(tps, with_plot=False, minr0=0)
+        _, _, pops[0] = neup(tps, with_plot=False, minr0=0, fine_tune=False)
     else:
         for i in range(len(idxes)-1): 
-            _, _, pop = neup(tps, with_plot=False, minr0=0)
+            _, _, pop = neup(tps, with_plot=False, minr0=0, fine_tune=False)
             pops[i] = pop
     if pre_neutralize: print(round(pops[0],2), end='; ')
 #         print("Student's t-test power of p-values:", list(pops.values()))
     for i in range(len(mvns)): 
         idx = idxes[i]
-        pvals[idx] = {}; zs[idx] = {}
+        pvals[idx] = {}; zs[idx] = {}; dxs[idx] = {}
         i0 = max(0, i-1)
         pop = pops[i0]
         if 0 < i < len(pops)-1: pop = (pop + pops[i]) / 2
         if pre_neutralize == False: pop = 1
-        elif len(idxes) == 2:
+        elif len(idxes) == 2 and not paired:
             pop = pop ** (2*mns[i]/(sum(mns)))
         vbs[idx] = estimated_deviation(mvns[idx], min(pop, 1))
     if paired:
@@ -117,6 +121,7 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=Fal
                 z = z_score_for_ttest_p_val(t, p)
                 pvals[idx][gene] = p
                 zs[idx][gene] = z
+                dxs[idx][gene] = dx
                 if vbs[idx]['Vs'][gene] == 0:
                     pvals[idx][gene] = np.nan; zs[idx][gene] = np.nan
     else:
@@ -130,17 +135,18 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=Fal
                 z = z_score_for_ttest_p_val(t, p)
                 pvals[idx][gene] = p
                 zs[idx][gene] = z
+                dxs[idx][gene] = dx
                 if vbs[idx]['Vs'][gene] + vbs[idx1]['Vs'][gene] == 0:
                     pvals[idx][gene] = np.nan; zs[idx][gene] = np.nan
             
-    if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]
+    if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]; dxs = dxs[idxes[0]]
     if debug: 
-        vbs['mvns'] = mvns
+        vbs['mvns'] = mvns; vbs['dx'] = dxs
         return pvals, zs, vbs
     return pvals, zs
     
 def ttest2(dx, v1, n1, En1, v2, n2, En2, equalV=False):
-    if n1 <= 1 or n2 <= 1: return np.NaN, np.NaN
+#     if n1 <= 1 or n2 <= 1: return np.NaN, np.NaN
     if equalV:
         df = En1 + En2 - 2
         sp = np.sqrt( ( (En1-1)*v1 + (En2-1)*v2 ) / df )
@@ -160,18 +166,19 @@ def estimated_deviation(mvn, pop, span = 0.9):
     ns = []; Ns = {}; ms = []; Vs = []; Ens = {}; Es2s = {}; Vars = {}; vbs = {}
     vbs['EVs'] = {}; vbs['Vmax'] = {}; vbs['means'] = {}
     genes = sorted(mvn)
+#     print(pop**0.5)
     for gene in genes:
         m, v, n = mvn[gene]
-        nn = 1 + (n-1)*pop
+        nn = 1 + (n-1) * pop ** 0.5# max(1.05, n*pop)
         ns.append(nn)
         Vs.append(v * (n-1)/n * nn / (nn-1))
         ms.append(m)
-        Ns[gene] = n * pop; Vars[gene] = v; vbs['means'][gene] = m
+        Ns[gene] = nn; Vars[gene] = v; vbs['means'][gene] = m
     x = np.array(ns)/np.nanmax(ns) + np.array(ms)/np.nanmax(ms)
     x[np.array(Vs)==0] = np.NaN
     logVs = np.log(Vs)
     nx = sum(abs(x)>=0)
-    if nx < 25000: ElogVs, SElogVs = loess_fit(x, logVs, w=ns, span=span, get_stderror=True) # Very slow and memory intensive.
+    if nx < 30000: ElogVs, SElogVs = loess_fit(x, logVs, w=ns, span=span, get_stderror=True) # Very slow and memory intensive.
     else: ElogVs = loess_fit(x, logVs, w=ns, span=span); SElogVs = None
     S2all = loess_fit(x, (logVs - ElogVs)**2, w=ns, span=span)
 #     while np.nanmin(S2all) < 0 and span > 0.4: 
@@ -206,11 +213,12 @@ def estimated_deviation(mvn, pop, span = 0.9):
                     r *= 0.9
                     if r<0.5: print('x0={}; s2={}; n={}; ElogV={}; VlogV0={}'.format(min(EV0, s2), s2, n, ElogV, VlogV0)); raise
             pts = [EV0, s2, Vmax]
-            M = fVls2(Vmax, s2, n, ElogV, VlogV0)
+            Dmax = fVls2(Vmax, s2, n, ElogV, VlogV0)
             upperlim = max(pts); lowerlim = min(pts)
-            while fVls2(upperlim, s2, n, ElogV, VlogV0) > 1e-20 * M: upperlim *= 1.1 + 10/n
-            while fVls2(lowerlim, s2, n, ElogV, VlogV0) > 1e-20 * M: lowerlim /= 1.1 + 10/n
-            try: M   *=     quad(lambda V:                      fVls2(V, s2, n, ElogV, VlogV0)/M, lowerlim, upperlim, points=pts)[0]
+            while fVls2(upperlim, s2, n, ElogV, VlogV0) > 1e-20 * Dmax: upperlim *= 1.1 + 10/n
+            while fVls2(lowerlim, s2, n, ElogV, VlogV0) > 1e-20 * Dmax: lowerlim /= 1.1 + 10/n
+            try: 
+                M   =  quad(lambda V:                      fVls2(V, s2, n, ElogV, VlogV0)/Dmax, lowerlim, upperlim, points=pts)[0] * Dmax
             except: print('EV0={}; s2={}; n={}; ElogV={}; VlogV0={}; M={}; upperlim={}; lowerlim={}; pts={}'.format(
                                 EV0, s2, n, ElogV, VlogV0, M, upperlim, lowerlim, pts)); raise
             if n < 100 or M > 0:
@@ -222,8 +230,10 @@ def estimated_deviation(mvn, pop, span = 0.9):
                     try:  En = fsolve(dVsigma, 3.01, args=(Vsgm/EV,))[0]
                     except: 
                         try: En = fsolve(dVsigma, 6, args=(Vsgm/EV,))[0]
-                        except: print('En Error: Vsgm={}; EV={}; EV0={}; s2={}; n={}; ElogV={}; VlogV0={}; M={}'.format(
-                                Vsgm, EV, EV0, s2, n, ElogV, VlogV0, M))
+                        except: 
+                            print('En Error: Vsgm={}; EV={}; EV0={}; s2={}; n={}; ElogV={}; VlogV0={}; M={}; Vmax={}; Dmax={}'.format(
+                                Vsgm, EV, EV0, s2, n, ElogV, VlogV0, M, Vmax, Dmax))
+                            Ens[gene] = np.nan; Es2s[gene] = np.nan; EV = np.nan; Vmax = np.nan
             else:
                 En = n; EV = EV0
             Ens[gene] = En

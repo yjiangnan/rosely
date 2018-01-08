@@ -3,7 +3,7 @@ Created on Jul 3, 2017
 
 @author: jiangnan
 '''
-import numpy as np
+import os, numpy as np
 import scipy.stats as ss
 from scipy.special import beta, betainc
 from scipy.integrate import quad # General purpose integration
@@ -66,7 +66,7 @@ gene1.2,15,25,5,30
                     if seqid not in self.data[group][bc]: self.data[group][bc][seqid] = 0
         
     def read_pickled(self):
-        with open(self.filename,'rb') as f: self.data, self.seqids = pickle.load(f)
+        with open(os.path.expanduser(self.filename),'rb') as f: self.data, self.seqids = pickle.load(f)
         
     def read_csv(self, sep='\t', has_groups=True, **kwargs):
         if '.xls' in self.filename[-5:]: 
@@ -88,7 +88,7 @@ gene1.2,15,25,5,30
                     self.data[group][spl[-1]][seqid] = csv[sample][seqid]
                 self.samples[sample] = self.data[group][spl[-1]]
         
-    def normalize_data(self, normalize_by='median', get_shared_presences=False):
+    def normalize_data(self, normalize_by='median', get_shared_presences=False, with_threshold=True):
         '''Normalize different samples to the same level and calculate important stats such as presences
         normalize_by: either 'median' (of all seqids)
                       or a seqid (e.g. Luciferase with massive quantity) in the data
@@ -97,7 +97,8 @@ gene1.2,15,25,5,30
         for seqid in self.seqids: 
             self.total_count[seqid] = sum([self.data[group][bc][seqid] for group in self.data 
                                            for bc in self.data[group]])
-        for seqid in self.seqids: self.threshold[seqid] = 1 + self.cross_contamination_rate * self.total_count[seqid] * 3
+        for seqid in self.seqids: 
+            self.threshold[seqid] = (1 + self.cross_contamination_rate * self.total_count[seqid] * 3) * with_threshold
         if normalize_by in self.seqids: self.seqids.remove(normalize_by)
         self.presences = {}; self.shared_presences = {}
         self.sample_presences = {}; self.sample_weights = {}; self.sample_sizes = {}
@@ -179,14 +180,20 @@ gene1.2,15,25,5,30
         return normdata
         
 class Result:
-    def __init__(self, ps, zs, LFDRthr0, data_name='data', nbins=30, df_fit=7, minr0=0, fine_tune=True, **kwargs):
+    def __init__(self, ps, zs, LFDRthr0, data_name='data', nbins=30, df_fit=5, minr0=0, fine_tune=True, **kwargs):
         self.ps = ps; self.zs = zs
-        self.nps, self.LFDR, self.pop = neup(ps, LFDRthr0=LFDRthr0, data_name=data_name,
+        self.neutralize_p_values(LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, 
+                                 minr0=minr0, fine_tune=fine_tune, **kwargs)
+        
+    def neutralize_p_values(self, LFDRthr0, data_name='data', nbins=30, df_fit=5, minr0=0, fine_tune=True, **kwargs):
+        self.nps, self.LFDR, self.pop = neup(self.ps, LFDRthr0=LFDRthr0, data_name=data_name,
                                             nbins=nbins, df_fit=df_fit, minr0=minr0, fine_tune=fine_tune, **kwargs)
         self.nzs = {}
-        for i in self.nps: self.nzs[i] = np.sign(zs[i]) * abs(ss.norm.ppf(self.nps[i]/2))
+        try: 
+            for i in self.nps.index: self.nzs[i] = np.sign(self.zs[i]) * abs(ss.norm.ppf(self.nps[i]/2))
+        except: print(i, self.zs, self.nps); return
         self.results = OrderedDict()
-        self.results['Local FDR'] = self.LFDR
+        self.results['LFDR'] = self.LFDR
         self.results['Controlled z-score'] = self.nzs
         self.results['Controlled p-value'] = self.nps
         self.results = pd.DataFrame(self.results).sort_values(by='Controlled p-value')
@@ -222,7 +229,7 @@ def freqcdf(N1, X, N2, Y, r):
     return pval, z
 
 def presence_absence_analysis(presences1, N1, presences2, N2, controls = None, min_count=0, shared_presences=None, 
-                              LFDRthr0=0.5, minr0=0, data_name='data', nbins=30, df_fit=7, **kwargs):
+                              LFDRthr0=0.5, minr0=0, data_name='data', nbins=30, df_fit=5, **kwargs):
     """Compare the difference between presences of two groups for each gene
     Args:
     presences1: dict: {'gene A':number of replicates gene A is present in for group1, ...}
@@ -301,7 +308,7 @@ def prepare_ttest_data(normdata_list, transform, minmean):
 def positive_read_analysis(normdata_list, transform='log', minmean=np.nan, controls=None, 
                            paired=False, equalV=False,  debug=False, method='ascertained_ttest', pre_neutralize=True,
                            LFDRthr0=0.5, minr0=0, fine_tune=True,
-                           data_name='data', nbins=30, df_fit=7, **kwargs):
+                           data_name='data', nbins=30, df_fit=5, **kwargs):
     """Analyze the non-zero counts by ascertained_ttest
     
     Args:
@@ -327,9 +334,10 @@ def positive_read_analysis(normdata_list, transform='log', minmean=np.nan, contr
     else: ps, zs, vbs = ttest(ttestdata, [0, 1], controls, paired=paired, equalV=equalV)
     res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, fine_tune=fine_tune, **kwargs)
     if debug: res.vbs = vbs
+    res.results['dx'] = pd.Series(vbs['dx'])
     return res
 
-def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=30, df_fit=7, power_of_pval=1, data_name='data'):
+def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=30, df_fit=5, power_of_pval=1, data_name='data'):
     """Combine different z-scores of the same gene into a single z-score and LFDR
     
     Args:
@@ -384,4 +392,4 @@ def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=30, df_fit=7, power
             for t in gene_targets[g]: print(t, ':', round(zs[t],2), ' '*max(0, 11-len(t)), end='')
             print('')
     print('')
-    return SLFDR, FLFDR
+    return pd.DataFrame({'combined z':gene_zs, 'Stouffer LFDR':SLFDR, 'Fisher LFDR':FLFDR})

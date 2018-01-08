@@ -10,7 +10,7 @@ Created on Aug 9, 2017
 
 
 import time
-import scipy.stats as ss
+import scipy.stats as ss, pandas as pd
 from pylab import *
 from scipy.optimize import curve_fit, minimize
 # from scipy.integrate import quad # General purpose integration
@@ -65,7 +65,7 @@ def poisson_regression(z, bins, freqs, df_fit, symmetric=True):
     res = minimize(fun_poisson, a0, args=(x, y))
     return exp(polyval(res.x, z))
 
-def locfdr(ps=None, zs=None, p0s=[0, 0.1], zthreshold=1.75, nbins = 30, df_fit=7, data_name='data', with_plot=True):
+def locfdr(ps=None, zs=None, p0s=[0, 0.1], zthreshold=1.75, nbins = 30, df_fit=5, data_name='data', with_plot=True):
     """ Calculate the local false discovery rate (LFDR) from a list or dict of pvalues ps or z-scores zs.
     p0s: The initial guess of gaussian parameters for neutral genes. The important part is not the values themselves,
          but the number of values. p0s=[0] would assume a standard normal distribution for neutral genes, and
@@ -92,12 +92,12 @@ def locfdr(ps=None, zs=None, p0s=[0, 0.1], zthreshold=1.75, nbins = 30, df_fit=7
     # zvals0 = array(list((zs.values())))
     zvals0[zvals0==Inf] = 21; zvals0[zvals0==-Inf] = -21
     try: minz = nanmin(zvals0[zvals0>-20]); maxz = nanmax(zvals0[zvals0< 20])
-    except: print(zvals0); raise
+    except: print(zvals0, ps); raise
     zvals0[zvals0> 20] =  (zvals0[zvals0> 20] - maxz)/40 + maxz
     zvals0[zvals0<-20] =  (zvals0[zvals0<-20] - minz)/40 + minz
     zvals = zvals0[logical_and(abs(zvals0)>=0, abs(zvals0)<20)]
     zvals = np.sort(np.append(-abs(zvals), abs(zvals)))
-    bins, freqs = density( zvals, int(nbins * (nanmax(abs(zvals)) / 3)**0.5 * (len(zvals) / 1000)**0.3) )
+    bins, freqs = density( zvals, int(nbins * (nanmax(abs(zvals)) / 2)**0.5 * (len(zvals) / 1000)**0.5) )
 
     x = bins[abs(bins)<zthreshold]
     y = freqs[abs(bins)<zthreshold]
@@ -140,7 +140,8 @@ def locfdr(ps=None, zs=None, p0s=[0, 0.1], zthreshold=1.75, nbins = 30, df_fit=7
     return retLFDR
     
 
-def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=7, data_name='data', with_plot=True, fine_tune=True):
+def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=5, data_name='data', 
+         with_plot=True, fine_tune=True, force_fine_tune=False):
     """ Calculate the neutrality-controlled p values.
     getLFDR: whether or not to calculate local false discovery rate (LFDR).
     LFDRthr0: the threshold of LFDR to consider as the boundary between neutral and non-neutral observations
@@ -155,11 +156,12 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=7
         pvals = array([pvals0[n] for n in names])
     else: pvals = array(pvals0)
     ps0 = ps = array(sorted((pvals[pvals<=1])))
-    aa = 1; a0 = 1; rp = np.arange(1, len(ps) + 1) / len(ps); r00 = 0; SE0 = Inf
+    aa = 1; a0 = 1; rp = np.arange(1, len(ps) + 1) / len(ps); r00 = 0; SE0 = Inf; r0 = re = 0
     for i in range(1000):
-        FDR = locfdr(ps, p0s=[0], with_plot=False, zthreshold=1.5)
+        try: FDR = locfdr(ps, p0s=[0], with_plot=False, zthreshold=1.5)
+        except: print(r0, re, ps0, pvals); raise
         FDRthr = LFDRthr0 * mean(FDR) #* aa**0.3
-        if FDR.min() < FDRthr: r0 = min(0.9, rp[(FDR<FDRthr)][-1])
+        if FDR.min() < FDRthr: r0 = min(0.8, rp[(FDR<FDRthr)][-1])
         else: r0 = 0.
         if r00 and minr0: r0 = (r0*r00**9) ** 0.1
         r00 = r0
@@ -182,7 +184,7 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=7
         SE0 = SE
     psneu = pvals ** (aa); fine_tuned = False
     if getLFDR:
-        if aa < 0.5 and fine_tune:
+        if (aa < 0.5 or force_fine_tune) and fine_tune:
             def fun(logx, y, *a):
                 return (a[0]**(1. - a[1] * y ** a[2])) * logx
             x = ps0[int(len(ps) * re):]
@@ -243,4 +245,4 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=7
         for (i, n) in enumerate(names):
             psdict[n] = psneu[i]; FDRdict[n] = LFDR[i]
         psneu = psdict; LFDR = FDRdict
-    return psneu, LFDR, aa
+    return pd.Series(psneu), pd.Series(LFDR), aa

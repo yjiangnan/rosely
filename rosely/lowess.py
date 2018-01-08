@@ -38,7 +38,7 @@ def call_python_version(Version, Module, Function, ArgumentList):
 
 def python2_loess_fit(x, y, w, span, get_stderror, statistics):
     from pyloess import loess  # @UnresolvedImport
-    lo = loess(x, y, span=span, statistics=statistics, weights=w)
+    lo = loess(x, y, span=span, weights=w)
     lo.fit()
     yfit = lo.outputs.fitted_values.tolist()
     if get_stderror: 
@@ -53,7 +53,7 @@ def loess_fit(x0, y0, w=None, span=0.8, get_stderror=False, statistics='approxim
     revidx  = sortidx.argsort()
     x = x0[notnanidx][sortidx].tolist(); y = y0[notnanidx][sortidx].tolist()
     if w is not None: w = np.array(w)[notnanidx][sortidx].tolist()
-    if sys.version_info < (3, 0):
+    if True or sys.version_info < (3, 0):
         yfit = python2_loess_fit(x, y, w, span, get_stderror, statistics)
     else:
         try: yfit = call_python_version("2.7", "rosely.lowess", "python2_loess_fit",  
