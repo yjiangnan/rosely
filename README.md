@@ -25,12 +25,24 @@ When many replicates are available and each construct does not exist in all repl
 
 
 ## Installation
+### Option 1
+Install as a normal python package:
+
+    python setup.py install
+
+or,
+
+    python3 setup.py install
+    
+### Option 2
+Use it locally and add path to search directory. This is helpful if you want to modify it.
 Simply copy the folder in any directory. When using, add the directory to the path. For example, I have `rosely` under `rudolphLab/scripts` folder, the following codes imports all methods in `rosely`:
 
     import sys
     if 'rudolphLab/scripts' not in sys.path: sys.path.insert(0, '/Users/jiangnan/Documents/rudolphLab/scripts')
     from rosely import *
 
+### Dependencies
 Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/jcrotinger/pyloess for python3 support.
 
 Additionally, `rosely` depends on the following python packages:
