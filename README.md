@@ -15,10 +15,10 @@
 ### 3. Neutrality-controlled *p*-values and their local false discovery rates (LFDR)
 `neup` is a function to calculate neutralized *p*-values by raising the raw *p*-values by a power to force the larger *p*-values to approximate the neutral distribution of *p*-values (uniform distribution between 0 and 1). 
 
-`locfdr` calculates the local false discovery rates, which measures the probability for each gene/construct to be false positive discovery. Note: conventional false discovery rate (FDR) is a measurement for all the genes/constructs whose *p*-values are small; it says nothing about the probability of false discovery for the gene/construct itself.
+`locfdr` calculates the local false discovery rates, which measures the probability for each gene/construct to be false positive discovery. Note: conventional false discovery rate (FDR or *q*-value) is a measurement for all the genes/constructs whose *p*-values are small; it says nothing about the probability of false discovery for the gene/construct itself.
 
 ### 4. Presence/absence analysis
-When many replicates are available and each construct does not exist in all replicates, `presence_absence_analysis` offers a Bayesian method to accurately calculate the *p*-value for the presence/absence difference in different groups for each construct. It is useful when the read counts contain exponential noises and cannot accuratley measure the biological effects of the construct. It has a dilution factor between groups so that different groups do not have to have the same probability for presence.
+When many replicates are available and each construct does not exist in all replicates, `presence_absence_analysis` offers a Bayesian method to accurately calculate the *p*-value for the presence/absence difference in different groups for each construct. It is useful when the read counts contain exponential noises and cannot accurately measure the biological effects of the construct. It will estimate a dilution factor between groups so that different groups do not have to have the same probability for presence. For example, during continuous cell culture, the shRNAs in the library could gradually be lost. For different time points, the average probability for presence in each sample for each shRNA will not be the same. Instead of directly comparing the frequency of presences in different groups, one needs to normalize the frquencies of different shRNAs to the mean of shRNAs around the median of all shRNAs or some control shRNAs. Such normalization is not simply multiplying the ratio of frequencies, but the ratio of coverages (i.e., how many average copies of shRNAs in each sample; shRNAs would not necessarily have a 100% presence in all samples even if each sample on average contains many copies). `presence_absence_analysis` has incorporated such considerations when calculating *p*-values.
 
 ### 5. Combining the *p*-values of different constructs for the same gene
 `combine_by_gene` implements both Stouffer's z-score method and Fisher's *p*-value method to combine the results of different constructs for the same gene.
@@ -46,12 +46,12 @@ Simply copy the folder into any directory. When using, add the directory to the 
     from rosely import *
 
 ### Dependencies
-Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/jcrotinger/pyloess for python3 support.
+Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/jcrotinger/pyloess for python3 support. You need to download and install it to use ascertained t-test.
 
 Additionally, `rosely` depends on the following python packages:
 
 `numpy scipy pandas matplotlib sklearn`
 
-If you have pip3 installed, install them by pip3 can be done as:
+If you have pip3 installed (for python3), install them by pip3 can be done as:
 
     sudo pip3 install numpy scipy pandas matplotlib sklearn
