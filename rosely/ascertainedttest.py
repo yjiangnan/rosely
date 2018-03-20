@@ -231,8 +231,8 @@ def estimated_deviation(mvn, pop, span = 0.9):
                     except: 
                         try: En = fsolve(dVsigma, 6, args=(Vsgm/EV,))[0]
                         except: 
-                            print('En Error: Vsgm={}; EV={}; EV0={}; s2={}; n={}; ElogV={}; VlogV0={}; M={}; Vmax={}; Dmax={}'.format(
-                                Vsgm, EV, EV0, s2, n, ElogV, VlogV0, M, Vmax, Dmax))
+                            print(gene, 'En Error: Vsgm={}; EV={}; EV0={}; s2={}; n={}; ElogV={}; VlogV0={}; M={}; Vmax={}; Dmax={}'.format(
+                                        Vsgm, EV, EV0, s2, n, ElogV, VlogV0, M, Vmax, Dmax))
                             Ens[gene] = np.nan; Es2s[gene] = np.nan; EV = np.nan; Vmax = np.nan
             else:
                 En = n; EV = EV0

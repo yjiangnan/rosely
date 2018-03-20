@@ -16,7 +16,7 @@ from .ascertainedttest import ascertained_ttest, ttest
 from .neutralstats import *
 from collections import OrderedDict
 
-__all__ = ['CountReads', 'freqcdf', 'positive_read_analysis', 'presence_absence_analysis', 'combine_by_gene',
+__all__ = ['CountReads', 'freqcdf', 'count_analysis', 'presence_absence_analysis', 'combine_by_gene',
            'prepare_ttest_data', 'Result']
 
 default_cross_contamination_rate = 4.4186e-06; 
@@ -58,7 +58,7 @@ gene1.2,15,25,5,30
         self.data = {}; self.norm_samples = {}; self.references = {}; self.extra = {}
         self.filename = filename
         if '.dat' == filename[-4:]: self.read_pickled()
-        else: self.read_csv(sep, has_groups, **kwargs)
+        else: self.read_csv(sep, has_groups=has_groups, **kwargs)
         for group in self.data: 
             for bc in self.data[group]: # barcode or sample name
                 self.samples[bc] = self.data[group][bc]
@@ -68,18 +68,18 @@ gene1.2,15,25,5,30
     def read_pickled(self):
         with open(os.path.expanduser(self.filename),'rb') as f: self.data, self.seqids = pickle.load(f)
         
-    def read_csv(self, sep='\t', has_groups=True, **kwargs):
+    def read_csv(self, sep='\t', igroup=1, has_groups=True, **kwargs):
         if '.xls' in self.filename[-5:]: 
             csv = pd.read_excel(self.filename)
         else: csv = pd.read_csv(self.filename, sep=sep, **kwargs)
-        self.seqids = csv.index; self.data = {}
+        self.seqids = list(csv.index); self.data = {}
         for sample in csv.keys():
             if has_groups: spl = sample.split('.')
             if has_groups and len(spl) <= 1:
                 print('Warning:', sample, 'is not included (saved in self.extra) because it cannot be separated into group and sample.')
                 self.extra[sample] = csv[sample]
             else:
-                if has_groups: group = '.'.join(spl[:-1])
+                if has_groups: group = '.'.join(spl[:igroup])
                 else: group = 'all'; spl = [sample]
                 if group not in self.data: self.data[group] = {}
                 if spl[-1] not in self.data[group]: 
@@ -90,7 +90,8 @@ gene1.2,15,25,5,30
         
     def normalize_data(self, normalize_by='median', get_shared_presences=False, with_threshold=True):
         '''Normalize different samples to the same level and calculate important stats such as presences
-        normalize_by: either 'median' (of all seqids)
+        normalize_by: either 'median' (of all non-zero count seqids)
+                      or 'quantileN' (1 <= N <= 9) to normalize by the mean of the 1/N proportion of data around the median
                       or a seqid (e.g. Luciferase with massive quantity) in the data
                       or a list of seqids whose median will be used for normalization. 
         '''
@@ -146,8 +147,8 @@ gene1.2,15,25,5,30
                     values = values[values>0]
                     if len(values): 
                         if 'quantile' in normalize_by: 
-                            qt = int(normalize_by[-1]); l = len(values)
-                            nRefs[group, bc] = np.mean(values[l//qt : l//qt*(qt-1)])
+                            qt = int(normalize_by[-1]) * 2; l = len(values)
+                            nRefs[group, bc] = np.mean(values[l//2 - l//qt : l//2 + l//qt])
                         else: nRefs[group, bc] = np.median(values)
                     else: nRefs[group, bc] = np.NaN
                 else:
@@ -155,7 +156,7 @@ gene1.2,15,25,5,30
                     else: nRefs[group, bc] = max(1, self.data[group][bc][normalize_by])
             self.mean_reference = np.nanmean(list(nRefs.values()))
         for group in self.data:
-            self.normdata[group] = {}; mean_normalized = {}
+            self.normdata[group] = {}
             for bc in self.data[group]:
                 self.normdata[group][bc] = {}
                 nRef = nRefs[group, bc]
@@ -178,10 +179,20 @@ gene1.2,15,25,5,30
         normdata = {}
         for sample in samples: normdata[sample] = self.normdata[group][sample]
         return normdata
+    
+    def set_missing_to_0s(self, seqids):
+        for seqid in seqids:
+            for group in self.data:
+                for sample in self.data[group]:
+                    if seqid not in self.data[group][sample]: 
+                        self.data[group][sample][seqid] = 0
+                        if seqid not in self.seqids: self.seqids.append(seqid)
+    
         
 class Result:
     def __init__(self, ps, zs, LFDRthr0, data_name='data', nbins=30, df_fit=5, minr0=0, fine_tune=True, **kwargs):
         self.ps = ps; self.zs = zs
+        self.results = OrderedDict()
         self.neutralize_p_values(LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, 
                                  minr0=minr0, fine_tune=fine_tune, **kwargs)
         
@@ -192,9 +203,8 @@ class Result:
         try: 
             for i in self.nps.index: self.nzs[i] = np.sign(self.zs[i]) * abs(ss.norm.ppf(self.nps[i]/2))
         except: print(i, self.zs, self.nps); return
-        self.results = OrderedDict()
         self.results['LFDR'] = self.LFDR
-        self.results['Controlled z-score'] = self.nzs
+        self.results['Controlled z-score'] = pd.Series(self.nzs)
         self.results['Controlled p-value'] = self.nps
         self.results = pd.DataFrame(self.results).sort_values(by='Controlled p-value')
 
@@ -302,20 +312,21 @@ def prepare_ttest_data(normdata_list, transform, minmean):
                 elif type(transform) is float:
                     ttestdata[seqid][-1].append(d1 ** transform)
                 else: raise Exception('transform has to be either log or a float number (power)')
-        if total/n < minmean: ttestdata[seqid] = [[]] * len(normdata_list)
+        if total/n < minmean: ttestdata[seqid] = [[] for _ in range(len(normdata_list))]
     return ttestdata
 
-def positive_read_analysis(normdata_list, transform='log', minmean=np.nan, controls=None, 
+def count_analysis(normdata_list, transform='log', minmean=np.nan, controls=None, 
                            paired=False, equalV=False,  debug=False, method='ascertained_ttest', pre_neutralize=True,
                            LFDRthr0=0.5, minr0=0, fine_tune=True,
                            data_name='data', nbins=30, df_fit=5, **kwargs):
-    """Analyze the non-zero counts by ascertained_ttest
+    """Analyze the counts by ascertained_ttest
     
     Args:
     transform: how the data should be transformed for normalization,
-               either 'log' for log-normal data,
-               or a power (0~1) for intermediate between log-normal and linear data, i.e., data**power should
-                   be normally distributed. You can determine the power by function mean_median_norm(data_list)
+               either 'log' for log-normal data (0s will be excluded),
+               or     'log1 for log-normal data including 0s (excluding data <= -1),
+               or     a power (0~1) for intermediate between log-normal and linear data, i.e., data**power should
+                          be normally distributed. You can determine the power by function mean_median_norm(data_list)
     Other args are passed to ascertained_ttest and neup and locfdr.
     
     Returns:
