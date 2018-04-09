@@ -46,7 +46,7 @@ Simply copy the folder into any directory. When using, add the directory to the 
     from rosely import *
 
 ### Dependencies
-Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/jcrotinger/pyloess for python3 support. You need to download and install it to use ascertained t-test.
+Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/yjiangnan/pyloess for python3 support. You need to download and install it to use ascertained t-test.
 
 Additionally, `rosely` depends on the following python packages:
 
