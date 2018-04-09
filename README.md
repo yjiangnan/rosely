@@ -26,15 +26,20 @@ When many replicates are available and each construct does not exist in all repl
 
 ## Installation
 ### Option 1
-Install as a normal python package:
+Download and install as a normal python package:
 
     sudo python setup.py install
 
 or,
 
     sudo python3 setup.py install
+
+### Option 2 
+If you have pip3 and git installed:
+
+    sudo pip3 install git+https://github.com/yjiangnan/rosely.git
     
-### Option 2
+### Option 3
 Use it locally and add path to search directory. This is helpful if you want to modify it.
 
 Simply copy the folder into any directory. When using, add the directory to the path. For example, I have `rosely` under `rudolphLab/scripts` folder, the following codes imports and reload all methods in `rosely` (including code changes):
@@ -46,7 +51,9 @@ Simply copy the folder into any directory. When using, add the directory to the 
     from rosely import *
 
 ### Dependencies
-Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/yjiangnan/pyloess for python3 support. You need to download and install it to use ascertained t-test.
+Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/yjiangnan/pyloess for python3 support. If you have git and pip3, install by
+
+    sudo pip3 install git+https://github.com/yjiangnan/pyloess.git
 
 Additionally, `rosely` depends on the following python packages:
 
