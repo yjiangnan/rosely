@@ -148,7 +148,7 @@ gene1.2,15,25,5,30
                     if len(values): 
                         if 'quantile' in normalize_by: 
                             qt = int(normalize_by[-1]) * 2; l = len(values)
-                            nRefs[group, bc] = np.mean(values[l//2 - l//qt : l//2 + l//qt])
+                            nRefs[group, bc] = np.mean(sorted(values)[l//2 - l//qt : l//2 + l//qt])
                         else: nRefs[group, bc] = np.median(values)
                     else: nRefs[group, bc] = np.NaN
                 else:
