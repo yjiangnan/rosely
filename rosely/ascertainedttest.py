@@ -28,9 +28,9 @@ def ttest(data, idxes, controls=None, paired=False, equalV=False):
     for idx in idxes:
         allms = [np.mean(data[gene][idx]) for gene in data if len(data[gene][idx]) and gene in ctrls]
         if controls is None: 
-            ms[idx] = np.mean(sorted(allms[len(allms)//3 : len(allms)//3*2]))
+            ms[idx] = np.mean(sorted(allms)[len(allms)//3 : len(allms)//3*2])
         else:
-            ms[idx] = np.mean(sorted(allms[len(allms)//5 : len(allms)//5*4]))
+            ms[idx] = np.mean(sorted(allms)[len(allms)//5 : len(allms)//5*4])
         pvals[idx] = {}; zs[idx] = {}
     if paired:
         for i in range(len(idxes[:-1])):
