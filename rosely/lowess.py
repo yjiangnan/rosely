@@ -21,9 +21,10 @@ Statistical Association, September 1988, volume 83, number 403, pp. 596-610.
 
 import numpy as np
 from scipy import linalg
-import logging, sys, execnet, time
+import logging, sys
 
 def call_python_version(Version, Module, Function, ArgumentList):
+    import execnet
     gw      = execnet.makegateway("popen//python=python%s" % Version)  # @UndefinedVariable
     channel = gw.remote_exec("""
         import sys
