@@ -170,7 +170,7 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=5
         re = r0 + (1 - r0) * pe
         x = ps[int(len(ps) * re):]
         y = linspace(pe, 1, len(x)) + 1./len(x)
-        a = linalg.lstsq(transpose([log(x)*y*y]), log(y)*y*y)[0][0]
+        a = linalg.lstsq(transpose([log(x)*y*y]), log(y)*y*y, rcond=None)[0][0]
 #         a = dot(log(y), linalg.pinv([log(x)]))[0]
         if (1-a)*(1-a0) < 0: aa *= a; break
         aa *= a
