@@ -51,14 +51,24 @@ Simply copy the folder into any directory. When using, add the directory to the 
     from rosely import *
 
 ### Dependencies
-Importantly, ascertained t-test in rosely depends on a specific version of pyloess https://github.com/yjiangnan/pyloess for python3 support. If you have git and pip3, install by
+Importantly, ascertained t-test in rosely depends on a specific version of `pyloess` https://github.com/yjiangnan/pyloess for python3 support. This pyloess requires `numpy` to have `Blas` (Basic Linear Algebra Subprograms) to run, otherwise errors would occur (e.g., "undefined symbol: dswap_"). To avoid this, install Blas (e.g., [OpenBLAS](https://www.openblas.net/)) with default `make`, then download [numpy](https://github.com/numpy/numpy), copy the file `site.cfg.example` as `site.cfg`, uncomment the lines associated with the version of Blas you installed. For `OpenBLAS`, the lines are
+
+    [openblas]
+    libraries = openblas
+    library_dirs = /opt/OpenBLAS/lib
+    include_dirs = /opt/OpenBLAS/include
+    runtime_library_dirs = /opt/OpenBLAS/lib
+
+Then install numpy by `python3 setup.py install`. After that, also copy the `site.cfg` to `/python_install_path/site-packages/numpy/disutils/`.
+
+Then, if you have git and pip3, install `pyloess` by
 
     sudo pip3 install git+https://github.com/yjiangnan/pyloess.git
 
 Additionally, `rosely` depends on the following python packages:
 
-`numpy scipy pandas matplotlib sklearn`
+`scipy pandas matplotlib sklearn`
 
 If you have pip3 installed (for python3), install them by pip3 can be done as:
 
-    sudo pip3 install numpy scipy pandas matplotlib sklearn
+    sudo pip3 install scipy pandas matplotlib sklearn
