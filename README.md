@@ -71,6 +71,8 @@ If you have pip3 installed (for python3), install them by pip3 can be done as:
 
     sudo pip3 install scipy pandas matplotlib sklearn
     
+
+### Install without root privileges
 If you do not have root privileges, you can try using virtual environment [JuNest](https://github.com/fsquillace/junest) and build `python3`, `python-pip`, `git`, `tk` and `gcc-fortran` inside it:
 
     junest -f
