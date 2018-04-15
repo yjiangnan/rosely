@@ -78,6 +78,6 @@ If you do not have root privileges, you can try using virtual environment [JuNes
     junest -f
     pacman -Sy python3 python-pip git tk gcc-fortran wget
     
-However, before that, make sure that `pip3` does not pre-exist in the paths inside the junest virtual environment. Then, install python packages associated with `rosely` and run analysis inside `junest` for local or short-time interactive analysis. Or, if you just `ssh` logged into your account on a server (outside `junest`), run
+However, before that, make sure that `pip3` does not pre-exist in the paths inside the junest virtual environment. Then, install python packages associated with `rosely` and run analysis inside `junest` for local or short-time interactive analysis. Or, for long runs, if you just `ssh` logged into your account on a server (outside `junest`), run
     
     nohup junest -- python3 -u script.py > log &
