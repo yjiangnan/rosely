@@ -51,7 +51,7 @@ Simply copy the folder into any directory. When using, add the directory to the 
     from rosely import *
 
 ### Dependencies
-Importantly, ascertained t-test in rosely depends on a specific version of `pyloess` https://github.com/yjiangnan/pyloess for python3 support. This pyloess requires `numpy` to have `Blas` (Basic Linear Algebra Subprograms) to run, otherwise errors would occur (e.g., "undefined symbol: dswap_"). To avoid this, install Blas (e.g., [OpenBLAS](https://www.openblas.net/)) with default `make`, then download [numpy](https://github.com/numpy/numpy), copy the file `site.cfg.example` as `site.cfg`, uncomment the lines associated with the version of Blas you installed. For `OpenBLAS`, the lines are
+Importantly, ascertained t-test in rosely depends on a specific version of `pyloess` https://github.com/yjiangnan/pyloess for python3 support. This pyloess requires `numpy` to have `Blas` (Basic Linear Algebra Subprograms) to run, otherwise errors would occur (e.g., "undefined symbol: dswap_"). To avoid this, install Blas (e.g., [OpenBLAS](https://www.openblas.net/)) with default `make` and `make install`, then download [numpy](https://github.com/numpy/numpy) and change path to its directory, copy the file `site.cfg.example` as `site.cfg`, uncomment the lines associated with the version of Blas you installed. For `OpenBLAS`, the lines are
 
     [openblas]
     libraries = openblas
@@ -59,16 +59,23 @@ Importantly, ascertained t-test in rosely depends on a specific version of `pylo
     include_dirs = /opt/OpenBLAS/include
     runtime_library_dirs = /opt/OpenBLAS/lib
 
-Then install numpy by `python3 setup.py install`. After that, also copy the `site.cfg` to `/python_install_path/site-packages/numpy/disutils/`.
+Then install numpy by `python3 setup.py install`. After that, also copy the `site.cfg` to `/python_install_path/site-packages/numpy/disutils/`. 
 
 Then, if you have git and pip3, install `pyloess` by
 
     sudo pip3 install git+https://github.com/yjiangnan/pyloess.git
 
-Additionally, `rosely` depends on the following python packages:
-
-`scipy pandas matplotlib sklearn`
+Additionally, `rosely` depends on the following python packages: `scipy pandas matplotlib sklearn`
 
 If you have pip3 installed (for python3), install them by pip3 can be done as:
 
     sudo pip3 install scipy pandas matplotlib sklearn
+    
+If you do not have root privileges, you can try using virtual environment [JuNest](https://github.com/fsquillace/junest) and build `python3`, `python-pip`, `git`, `tk` and `gcc-fortran` inside it:
+
+    junest -f
+    pacman -Sy python3 python-pip git tk gcc-fortran wget
+    
+However, before that, make sure that `pip3` does not pre-exist in the paths inside the junest virtual environment. Then, install python packages associated with `rosely` and run analysis inside `junest` for local or short-time interactive analysis. Or, if you just `ssh` logged into your account on a server (outside `junest`), run
+    
+    nohup junest -- python3 -u script.py > log &
