@@ -23,6 +23,8 @@ When many replicates are available and each construct does not exist in all repl
 ### 5. Combining the *p*-values of different constructs for the same gene
 `combine_by_gene` implements both Stouffer's z-score method and Fisher's *p*-value method to combine the results of different constructs for the same gene.
 
+### 6. KEGG pathway enrichment analysis
+Module `pathwayanalysis` includes tools for KEGG pathway enrichment analysis and for drawing the enriched pathways with nodes color-coded by provided values such as z-scores and fold changes. It depends on [KEGGscape](https://github.com/idekerlab/KEGGscape) inside Cytoscape.
 
 ## Installation
 ### Option 1
@@ -65,11 +67,11 @@ Then, if you have git and pip3, install `pyloess` by
 
     sudo pip3 install git+https://github.com/yjiangnan/pyloess.git
 
-Additionally, `rosely` depends on the following python packages: `scipy pandas matplotlib sklearn`
+Additionally, `rosely` depends on some python packages.
 
 If you have pip3 installed (for python3), install them by pip3 can be done as:
 
-    sudo pip3 install scipy pandas matplotlib sklearn
+    sudo pip3 install scipy pandas matplotlib sklearn py2cytoscape biopython
     
 
 ### Install without root privileges
