@@ -17,34 +17,47 @@ from scipy.integrate import quad
 warnings.filterwarnings("error", category=RuntimeWarning)
 from .neutralstats import density, poisson_regression, neup
 
-__all__ = ['ascertained_ttest', 'mean_median_norm', 'ttest']
+__all__ = ['ascertained_ttest', 'mean_median_norm', 'ttest', 'ttest2', 'z_score_for_ttest_p_val']
 
 
-def ttest(data, idxes, controls=None, paired=False, equalV=False):
-    ms = {}; mvns = {}
+def ttest(data, idxes, controls=None, paired=False, weights=None, equalV=False):
+    ms = {}; mvns = {}; ws = {}; dxs = {}
     pvals = {}; zs = {}
-    ctrls = controls; minn = 2
+    ctrls = controls; minn = 1.25
     if controls is None: ctrls = data.keys()
+    def weighted_mean(ds, ws): 
+        n = sum(ws)
+        if n == 0: return np.nan
+        return sum([d*w for (d, w) in zip(ds, ws)]) / n
     for idx in idxes:
-        allms = [np.mean(data[gene][idx]) for gene in data if len(data[gene][idx]) and gene in ctrls]
-        if controls is None: 
+        if weights is None:
+            allms = [np.mean(data[gene][idx]) for gene in data if len(data[gene][idx]) and gene in ctrls]
+        else:
+            allms = [weighted_mean(data[gene][idx], weights[gene][idx])
+                     for gene in data if len(data[gene][idx]) and gene in ctrls]
+        if controls is None: # The mean across samples
             ms[idx] = np.mean(sorted(allms)[len(allms)//3 : len(allms)//3*2])
         else:
             ms[idx] = np.mean(sorted(allms)[len(allms)//5 : len(allms)//5*4])
-        pvals[idx] = {}; zs[idx] = {}
+        pvals[idx] = {}; zs[idx] = {}; dxs[idx] = {}
     if paired:
         for i in range(len(idxes[:-1])):
             idx0 = idxes[i]; idx1 = idxes[i+1]
             mvns[idx0] = {}
             for gene in data:
-                d = np.array(data[gene][idx1]) - data[gene][idx0] - (ms[idx1] - ms[idx0])
-                mvns[idx0][gene] = [np.mean(d), np.var(d, ddof=1), len(d)]
+                ds = np.array(data[gene][idx1]) - data[gene][idx0] - (ms[idx1] - ms[idx0])
+                if weights is None: ws = [1] * len(ds)
+                else: ws = weights[gene][idx0]
+                m = weighted_mean(ds, ws); n = sum(ws)
+                v = sum([(d-m)**2 * w for (d,w) in zip(ds, ws)]) / (n - 1)
+                mvns[idx0][gene] = [m, v, n]
         for idx in idxes[:-1]:
             for gene in data:
                 m, v, n = mvns[idx][gene]
                 t = m / (v/n)**0.5
                 p = ss.t.cdf(-abs(t), n-1) * 2
                 z = z_score_for_ttest_p_val(t, p)
+                dxs[idx][gene] = m
                 if v == 0:
                     p = np.nan; z = np.nan
                 pvals[idx][gene] = p; zs[idx][gene] = z
@@ -52,9 +65,13 @@ def ttest(data, idxes, controls=None, paired=False, equalV=False):
         for idx in idxes: 
             mvns[idx] = {}
             for gene in data:
-                d = data[gene][idx]; n = len(d)
+                ds = data[gene][idx]
+                if weights is None: ws = [1] * len(ds)
+                else: ws = weights[gene][idx]
+                m = weighted_mean(ds, ws); n = sum(ws)
+                v = sum([(d-m)**2 * w for (d,w) in zip(ds, ws)]) / (n - 1)
                 if n >= minn:
-                    mvns[idx][gene] = [np.mean(d) - ms[idx], np.var(d, ddof=1), n]
+                    mvns[idx][gene] = [m - ms[idx], v, n]
                 else: mvns[idx][gene] = [np.nan] * 3
         for gene in data:
             for i in range(len(idxes[:-1])):
@@ -64,12 +81,14 @@ def ttest(data, idxes, controls=None, paired=False, equalV=False):
                 dx = m1 - m0
                 t, p = ttest2(dx, v0, n0, n0, v1, n1, n1, equalV)
                 z = z_score_for_ttest_p_val(t, p)
+                dxs[idx][gene] = dx
                 if v0 + v1 == 0: p = np.nan; z = np.nan
                 pvals[idx][gene] = p; zs[idx][gene] = z
-    if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]
-    return pvals, zs, mvns
+    if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]; dxs = dxs[idxes[0]]
+    return pvals, zs, dxs, mvns
 
-def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=False, equalV=False, pre_neutralize=True):
+def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, weights=None, span=0.8,
+                      debug=False, equalV=False, pre_neutralize=True):
     """
     data is a dict with id (eg. shRNA, gene) as keys and a list of readouts of different experimental conditions indexed by idxes.
     eg.: 
@@ -90,8 +109,8 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=Fal
     if debug is True, return an additional dict containing most intermediate variables.
     """
     vbs = {}
-    pvals = {}; zs = {}; pops = {}; dxs = {}
-    tps, _, mvns = ttest(data, idxes, controls, paired, equalV)
+    pvals = {}; zs = {}; pops = {}
+    tps, _, dxs, mvns = ttest(data, idxes, controls, paired, weights, equalV)
     mns = [np.nanmean([mvns[idx][gene][2] for gene in mvns[idx]]) for idx in idxes[:len(idxes)-paired]]
     if len(idxes) == 2:
         _, _, pops[0] = neup(tps, with_plot=False, minr0=0, fine_tune=False)
@@ -103,14 +122,14 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=Fal
 #         print("Student's t-test power of p-values:", list(pops.values()))
     for i in range(len(mvns)): 
         idx = idxes[i]
-        pvals[idx] = {}; zs[idx] = {}; dxs[idx] = {}
+        pvals[idx] = {}; zs[idx] = {}
         i0 = max(0, i-1)
         pop = pops[i0]
         if 0 < i < len(pops)-1: pop = (pop + pops[i]) / 2
         if pre_neutralize == False: pop = 1
         elif len(idxes) == 2 and not paired:
             pop = pop ** (2*mns[i]/(sum(mns)))
-        vbs[idx] = estimated_deviation(mvns[idx], min(pop, 1))
+        vbs[idx] = estimated_deviation(mvns[idx], min(pop, 1), span=span)
     if paired:
         for idx in mvns:
             for gene in data:
@@ -121,7 +140,6 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=Fal
                 z = z_score_for_ttest_p_val(t, p)
                 pvals[idx][gene] = p
                 zs[idx][gene] = z
-                dxs[idx][gene] = dx
                 if vbs[idx]['Vs'][gene] == 0:
                     pvals[idx][gene] = np.nan; zs[idx][gene] = np.nan
     else:
@@ -135,11 +153,10 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, debug=Fal
                 z = z_score_for_ttest_p_val(t, p)
                 pvals[idx][gene] = p
                 zs[idx][gene] = z
-                dxs[idx][gene] = dx
                 if vbs[idx]['Vs'][gene] + vbs[idx1]['Vs'][gene] == 0:
                     pvals[idx][gene] = np.nan; zs[idx][gene] = np.nan
             
-    if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]; dxs = dxs[idxes[0]]
+    if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]
     if debug: 
         vbs['mvns'] = mvns; vbs['dx'] = dxs
         return pvals, zs, vbs
@@ -162,7 +179,7 @@ def z_score_for_ttest_p_val(t, p):
     z = -ss.norm.ppf(np.array(p)/2) * np.sign(t)
     return z
 
-def estimated_deviation(mvn, pop, span = 0.9):
+def estimated_deviation(mvn, pop, span):
     ns = []; Ns = {}; ms = []; Vs = []; Ens = {}; Es2s = {}; Vars = {}; vbs = {}
     vbs['EVs'] = {}; vbs['Vmax'] = {}; vbs['means'] = {}
     genes = sorted(mvn)
@@ -240,8 +257,9 @@ def estimated_deviation(mvn, pop, span = 0.9):
             Es2s[gene] = EV #* (En-3) / (En-1)
         else: Ens[gene] = np.nan; Es2s[gene] = np.nan; EV = np.nan; Vmax = np.nan
         vbs['EVs'][gene] = EV; vbs['Vmax'][gene] = Vmax
-    vbs['Es2s'] = Es2s; vbs['Ens'] = Ens; vbs['ns'] = Ns; vbs['Vs'] = Vars
-    vbs['S2all'] = S2all; vbs['Vsmpls'] = Vsmpls; vbs['ElogVs'] = ElogVs
+    vbs['Es2s'] = Es2s; vbs['Ens'] = Ens; vbs['ns'] = vbs['n'] = Ns; vbs['Vs'] = Vars; vbs['mean'] = ms
+    vbs['S2all'] = S2all; vbs['Vsmpls'] = Vsmpls; vbs['ElogVs'] = ElogVs; 
+    vbs['VlogV0s'] = VlogV0s; vbs['Vadj'] = Vadj; vbs['x'] = x
     return vbs
 
 def mean_median_norm(v, a0=0.1, only_positive=False):
