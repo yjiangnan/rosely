@@ -140,7 +140,7 @@ def locfdr(ps=None, zs=None, p0s=[0, 0.1], zthreshold=1.75, nbins = 30, df_fit=5
     return retLFDR
     
 
-def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=5, data_name='data', 
+def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, maxr0=1, nbins=30, df_fit=5, data_name='data', 
          with_plot=True, fine_tune=True, force_fine_tune=False):
     """ Calculate the neutrality-controlled p values.
     getLFDR: whether or not to calculate local false discovery rate (LFDR).
@@ -182,7 +182,7 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=5
         SE = ( sum((x**a - y)**2 * y*y)/sum(y*y) )**0.5 / len(x)
         if with_plot: 
             print('iterations:{} r0:{:.3f}, re:{:.3f}, aa:{:.5f} a:{:.5f} SE:{:.7f}'.format(i, r0, re, aa, a, SE))
-        if SE > SE0 and minr0: break
+        if SE > SE0 and minr0 and r0 < maxr0: break
         SE0 = SE
     psneu = pvals ** (aa); fine_tuned = False
     if getLFDR:
@@ -220,7 +220,9 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.00001, nbins=30, df_fit=5
         The power of p values is too large (ideally the power should be 1), meaning that most raw p values
         are much larger than that expected by random chance and the controls failed to serve as random data. 
         This could happen either by statistical underestimation of degrees of freedom, 
-        or by stable noise in most data that blurred the difference between groups. The calculated 
+        or by stable noise in most data that blurred the difference between groups,
+        or by different samples not having the same data quality,
+        or by problems in data normalization. The calculated 
         LFDRs (adjusted by the power) should be treated with caution and could underestimate true LFDRs.
             ''')
             time.sleep(0.1)
