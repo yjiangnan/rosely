@@ -8,6 +8,7 @@ import scipy.stats as ss
 from scipy.special import beta, betainc
 from scipy.integrate import quad # General purpose integration
 import matplotlib as mpl
+from numpy import dtype
 mpl.rc('font',family='Helvetica', weight='bold', size=14)
 import pickle, operator
 np.seterr(all='ignore')
@@ -82,33 +83,29 @@ gene1.2,15,25,5,30
                 if has_groups: group = '.'.join(spl[:igroup])
                 else: group = 'all'; spl = [sample]
                 if group not in self.data: self.data[group] = {}
-                if spl[-1] not in self.data[group]: 
-                    self.data[group][spl[-1]] = {}
-                for seqid in self.seqids:
-                    self.data[group][spl[-1]][seqid] = csv[sample][seqid]
-                self.samples[sample] = self.data[group][spl[-1]]
+                self.samples[sample] = self.data[group][spl[-1]] = csv[sample]
         
-    def normalize_data(self, normalize_by='median', get_shared_presences=False, with_threshold=True):
+    def normalize_data(self, normalize_by='median', normcutoff = 1, get_shared_presences=False, with_threshold=True):
         '''Normalize different samples to the same level and calculate important stats such as presences
         normalize_by: either 'median' (of all non-zero count seqids)
                       or 'quantileN' (1 <= N <= 9) to normalize by the mean of the 1/N proportion of data around the median
                       or a seqid (e.g. Luciferase with massive quantity) in the data
-                      or a list of seqids whose median will be used for normalization. 
+                      or a list of seqids whose median will be used for normalization.
+         normcutoff: The minimum average value to be considered non-zero and included for calculating medium 
+                     and quantile during normalization. 
         '''
-        for seqid in self.seqids: 
-            self.total_count[seqid] = sum([self.data[group][bc][seqid] for group in self.data 
-                                           for bc in self.data[group]])
-        for seqid in self.seqids: 
-            self.threshold[seqid] = (1 + self.cross_contamination_rate * self.total_count[seqid] * 3) * with_threshold
+        self.total_count = pd.DataFrame(self.samples).sum(axis=1)
+        self.threshold = (1 + self.cross_contamination_rate * self.total_count * 3) * with_threshold
         if normalize_by in self.seqids: self.seqids.remove(normalize_by)
         self.presences = {}; self.shared_presences = {}
         self.sample_presences = {}; self.sample_weights = {}; self.sample_sizes = {}
         for group in self.data:
-            self.presences[group] = {}
-            self.sample_presences[group] = {}; self.sample_weights[group] = {}; self.sample_sizes[group] = {}
+            df = pd.DataFrame(self.data[group])
+            self.sample_presences[group] = {}; self.sample_weights[group] = {}
             for bc in self.data[group]: 
-                self.sample_presences[group][bc] = sum([self.data[group][bc][seqid]>self.threshold[seqid] 
-                                                     for seqid in self.data[group][bc]])
+                sample = df[bc]
+                sample[sample <= self.threshold] = 0
+                self.sample_presences[group][bc] = (sample>0).sum()
             median_presences = np.nanmedian(list(self.sample_presences[group].values()))
             std_presences = np.std(list(self.sample_presences[group].values()))
             for bc in self.data[group]: 
@@ -116,11 +113,8 @@ gene1.2,15,25,5,30
                 self.sample_weights[group][bc] = p * (p<1) + (p>=1)
 
             self.sample_sizes[group] = sum(list(self.sample_weights[group].values()))
-            sw = self.sample_weights[group]
-            for seqid in self.seqids: 
-                self.presences[group][seqid] = sum([(self.data[group][bc][seqid] > self.threshold[seqid]) * sw[bc]
-                                                   for bc in self.data[group]])
-        self.normdata = {}; self.meanctrl = {}
+            sw = pd.Series(self.sample_weights[group])
+            self.presences[group] = (df>0).multiply(sw).sum(axis=1)
         if get_shared_presences:
             for group in self.data:
                 subgroup = ''
@@ -136,35 +130,34 @@ gene1.2,15,25,5,30
                             sw = min(self.sample_weights[group][spl], self.sample_weights[g][spl])
                             self.shared_presences[sg][seqid] += (self.data[group][spl][seqid] > th and
                                                               self.data[g    ][spl][seqid] > th) * sw
-            self.shared_presences
         self.nRefs = nRefs = {}
         nby = normalize_by
         if nby == 'median' or 'quantile' in nby: nby = list(self.seqids)
+        allsamples = 0
+        for spl in self.samples: allsamples = allsamples + self.samples[spl] / len(self.samples)
+        allsamples = allsamples[allsamples > normcutoff]
+        if 'quantile' in normalize_by: 
+            qt = int(normalize_by[-1]) * 2; l = len(allsamples)
+            mdall = sorted(allsamples)[l//2 - l//qt : l//2 + l//qt]
+            allsamples = allsamples[(allsamples > mdall[0]) & (allsamples < mdall[-1])]
         for group in self.data: 
             for bc in self.data[group]:
                 if type(nby) is list:
-                    values = np.array([self.data[group][bc][seqid] for seqid in nby])
-                    values = values[values>0]
-                    if len(values): 
-                        if 'quantile' in normalize_by: 
-                            qt = int(normalize_by[-1]) * 2; l = len(values)
-                            nRefs[group, bc] = np.mean(sorted(values)[l//2 - l//qt : l//2 + l//qt])
-                        else: nRefs[group, bc] = np.median(values)
-                    else: nRefs[group, bc] = np.NaN
+                    sample = self.data[group][bc]
+                    if 'quantile' in normalize_by: 
+                        nRefs[group, bc] = np.mean(sample.loc[allsamples.index])
+                    else: nRefs[group, bc] = np.median(sample.loc[allsamples.index])
+                    if nRefs[group, bc]==0: nRefs[group, bc] = np.NaN
                 else:
                     if normalize_by not in self.data[group][bc]: nRefs[group, bc] = np.NaN
                     else: nRefs[group, bc] = max(1, self.data[group][bc][normalize_by])
             self.mean_reference = np.nanmean(list(nRefs.values()))
+        self.normdata = OrderedDict()
         for group in self.data:
-            self.normdata[group] = {}
+            self.normdata[group] = OrderedDict()
             for bc in self.data[group]:
-                self.normdata[group][bc] = {}
                 nRef = nRefs[group, bc]
-                for seqid in self.seqids: 
-                    cnt = 0
-                    if seqid in self.data[group][bc] and self.data[group][bc][seqid]>self.threshold[seqid]: 
-                        cnt = self.data[group][bc][seqid]
-                    self.normdata[group][bc][seqid] = cnt / nRef * self.mean_reference
+                self.normdata[group][bc] = self.data[group][bc] / nRef * self.mean_reference
             self.normdata[group] = pd.DataFrame(self.normdata[group])
         
     def get_data(self, bc, seqid):
@@ -174,6 +167,15 @@ gene1.2,15,25,5,30
     def get_threshold(self, seqid):
         if seqid in self.threshold: return self.threshold[seqid]
         else: return 0
+        
+    def nRefs_as_weights(self, group, samples='all'):
+        if samples is 'all': samples = self.normdata[group].keys()
+        weights = {}
+        ws = [self.nRefs[group, sample] for sample in samples]
+        mw = np.nanmedian(ws)
+        for sample in samples:
+            weights[sample] = min(1, self.nRefs[group, sample] / mw)
+        return weights
     
     def subgroup(self, group, samples):
         normdata = {}
@@ -187,6 +189,25 @@ gene1.2,15,25,5,30
                     if seqid not in self.data[group][sample]: 
                         self.data[group][sample][seqid] = 0
                         if seqid not in self.seqids: self.seqids.append(seqid)
+                        
+    def quality_heatmap(self, groups='all', samples='all', vmin=0.8, **kwargs):
+        if groups == 'all': groups = sorted(self.data)
+        if samples == 'all': group_samples = [(g, s) for g in groups for s in self.data[g]]
+        elif len(groups) == 1: group_samples = list(zip(groups * len(samples), samples))
+        else: group_samples = list(zip([[groups[i]] * len(samples[i]) for i in range(len(groups))],
+                                  [s for spl in samples for s in spl]))
+        M = pd.DataFrame(columns=pd.MultiIndex.from_tuples(group_samples), 
+                         index=pd.MultiIndex.from_tuples(group_samples))
+        for i, si in enumerate(group_samples):
+            M[si][si] = 1
+            for sj in group_samples[i+1:]:
+                vs = pd.DataFrame({0:self.normdata[si[0]][si[1]], 1:self.normdata[sj[0]][sj[1]]}).dropna()
+                r = np.corrcoef(vs[0], vs[1])[0][1]
+                M[sj][si] = M[si][sj] = r
+        import seaborn
+        seaborn.heatmap(M.astype('float64'), vmin=vmin, **kwargs)
+        mpl.pyplot.xlabel(''); mpl.pyplot.ylabel('')
+        return M
     
         
 class Result:
@@ -207,6 +228,38 @@ class Result:
         self.results['Controlled z-score'] = pd.Series(self.nzs)
         self.results['Controlled p-value'] = self.nps
         self.results = pd.DataFrame(self.results).sort_values(by='Controlled p-value')
+        
+    def plot_variance(self, sample_index='all', xname='mean'):
+        if 'vbs' not in self.__dict__: 
+            raise Exception('Variable vbs does not exist. Run count_analysis with debug=True to calculate it.')
+        from matplotlib.pyplot import plot, xlabel, ylabel, subplot, legend, figure
+        def plotx(xname, vbs):
+            x = vbs[xname]
+            logVs = np.log(vbs['Vs'])
+            ElogVs = vbs['ElogVs']
+            S2all = vbs['S2all']; Vsmpls = vbs['Vsmpls']; VlogV0s = vbs['VlogV0s']; Vadj = vbs['Vadj']
+            plot(x, logVs, '.', label='all genes')
+            plot(x, ElogVs, '.', label='mean log variance') 
+            plot(x, ElogVs + S2all**0.5, '*r', label='SD(log variance)')
+            plot(x, ElogVs - S2all**0.5, '*r')
+            plot(x[:len(Vsmpls)], ElogVs + Vadj**0.5, '+c', label='Sampling SD')
+            plot(x[:len(Vsmpls)], ElogVs - Vadj**0.5, '+c')
+            plot(x, ElogVs + VlogV0s ** 0.5, '.m', label='prior gene SD')
+            plot(x, ElogVs - VlogV0s ** 0.5, '.m') 
+            xlabel(xname)
+            ylabel('log variance')
+            legend()
+        if sample_index is 'all': sample_index = range(len(self.vbs)-2)
+        elif type(sample_index) is int: sample_index = [sample_index]
+        figure(figsize=(2 + 6*len(sample_index), 5))
+        for i in sample_index:
+            vbs = self.vbs[i]
+            for v in vbs: vbs[v] = pd.Series(vbs[v])
+            subplot(101+10*len(sample_index) + i)
+            plotx(xname, vbs)
+#         if np.nanmin(vbs['n']) < np.nanmax(vbs['n']): 
+#             subplot(122)
+#             plotx('n', vbs)
 
 def freqcdf(N1, X, N2, Y, r):
     '''Calculate the p-value (2-tailed) for the difference between frequencies X and Y in total trails of N1 and N2, 
@@ -293,41 +346,57 @@ def presence_absence_analysis(presences1, N1, presences2, N2, controls = None, m
     res.results['presence change'] = pd.Series(change)
     return res
 
-def prepare_ttest_data(normdata_list, transform, minmean):
+def prepare_ttest_data(normdata_list, transform, minmean, sample_weights):
     seqids = []
+    weights = None
+    if sample_weights is not None: weights = {}
     for data in normdata_list: 
         for sample in data: seqids += list(data[sample].keys())
     seqids = set(seqids)
     ttestdata = {}
     for seqid in seqids:
         ttestdata[seqid] = []; total = 0; n = 0
-        for normdata in normdata_list:
+        if sample_weights is not None: weights[seqid] = []
+        for i, normdata in enumerate(normdata_list):
             ttestdata[seqid].append([])
+            if sample_weights is not None: weights[seqid].append([])
             for sample in sorted(normdata):
-                d1 = normdata[sample][seqid]; total += d1; n += 1
+                d1 = normdata[sample][seqid]
                 if transform == 'log':
                     if d1 >  0: ttestdata[seqid][-1].append(np.log2(d1))
-                elif transform == 'log1':
-                    if d1 > -1: ttestdata[seqid][-1].append(np.log2(1 + d1))
+                elif type(transform) is str and transform[:3] == 'log':
+                    n0 = float(transform[3:])
+                    if '.' not in transform[3:]: n0 = int(n0)
+                    if str(n0) != transform[3:]: 
+                        raise Exception('The string following log is not a well formated float number')
+                    if d1 > -n0: ttestdata[seqid][-1].append(np.log2(n0 + d1))
                 elif type(transform) is float:
                     ttestdata[seqid][-1].append(d1 ** transform)
                 else: raise Exception('transform has to be either log or a float number (power)')
-        if total/n < minmean: ttestdata[seqid] = [[] for _ in range(len(normdata_list))]
-    return ttestdata
+                w = 1
+                if sample_weights is not None and len(weights[seqid][-1]) < len(ttestdata[seqid][-1]): 
+                    w = sample_weights[i][sample]
+                    weights[seqid][-1].append(w)
+                total += d1 * w; n += w
+        if total/n < minmean: 
+            del ttestdata[seqid]
+            if sample_weights is not None: del weights[seqid]
+    return ttestdata, weights
 
-def count_analysis(normdata_list, transform='log', minmean=np.nan, controls=None, 
-                           paired=False, equalV=False,  debug=False, method='ascertained_ttest', pre_neutralize=True,
-                           LFDRthr0=0.5, minr0=0, fine_tune=True,
+def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, sample_weights=None,
+                           paired=False, equalV=False,  debug=False, method='ascertained_ttest', pre_neutralize=True, 
+                           span=0.5, LFDRthr0=0.5, minr0=0, fine_tune=True,
                            data_name='data', nbins=30, df_fit=5, **kwargs):
     """Analyze the counts by ascertained_ttest
     
     Args:
     transform: how the data should be transformed for normalization,
                either 'log' for log-normal data (0s will be excluded),
-               or     'log1 for log-normal data including 0s (excluding data <= -1),
+               or     'logN for log-normal data including 0s (excluding data <= -1, x --> log(N+x)),
                or     a power (0~1) for intermediate between log-normal and linear data, i.e., data**power should
                           be normally distributed. You can determine the power by function mean_median_norm(data_list)
-    Other args are passed to ascertained_ttest and neup and locfdr.
+    minmean: the minimum mean values for data to be included for analysis, default 5 if transform is log1, or NaN else.
+    Other args are passed to ascertained_ttest (or ttest),  neup, and locfdr.
     
     Returns:
     An object with the following members:
@@ -338,14 +407,18 @@ def count_analysis(normdata_list, transform='log', minmean=np.nan, controls=None
         LFDR:  Local False Discovery Rate calculated from netralized p-values nps
         pop:   power of p-values
     """
-    ttestdata = prepare_ttest_data(normdata_list, transform, minmean)
+    if np.isnan(minmean) and transform == 'log1': minmean = 10
+    ttestdata, weights = prepare_ttest_data(normdata_list, transform, minmean, sample_weights)
     if method=='ascertained_ttest':
-        ps, zs, vbs = ascertained_ttest(ttestdata, [0, 1], controls, paired=paired, debug=True, 
-                                        equalV=equalV, pre_neutralize=pre_neutralize)
-    else: ps, zs, vbs = ttest(ttestdata, [0, 1], controls, paired=paired, equalV=equalV)
+        ps, zs, vbs = ascertained_ttest(ttestdata, [0, 1], controls, paired=paired, debug=True, weights=weights,
+                                        equalV=equalV, pre_neutralize=pre_neutralize, span=span)
+        dxs = vbs['dx']
+    else: ps, zs, dxs, vbs = ttest(ttestdata, [0, 1], controls, paired=paired, weights=weights, equalV=equalV)
     res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, fine_tune=fine_tune, **kwargs)
     if debug: res.vbs = vbs
-    res.results['dx'] = pd.Series(vbs['dx'])
+    nm = 'dx'
+    if 'log' in transform: nm = 'log2 fold change'
+    res.results[nm] = pd.Series(dxs)
     return res
 
 def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=30, df_fit=5, power_of_pval=1, data_name='data'):
