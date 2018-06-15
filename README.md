@@ -24,7 +24,7 @@ When many replicates are available and each construct does not exist in all repl
 `combine_by_gene` implements both Stouffer's z-score method and Fisher's *p*-value method to combine the results of different constructs for the same gene.
 
 ### 6. KEGG pathway enrichment analysis
-Module `pathwayanalysis` includes tools for KEGG pathway enrichment analysis and for drawing the enriched pathways with nodes color-coded by provided values such as z-scores and fold changes. It depends on [KEGGscape](https://github.com/idekerlab/KEGGscape) inside Cytoscape.
+Module `pathwayanalysis` includes tools for KEGG pathway enrichment analysis, gene id mapping, and for drawing the enriched pathways with nodes color-coded by provided values such as z-scores and fold changes. 
 
 ## Installation
 ### Option 1
