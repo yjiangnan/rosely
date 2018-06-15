@@ -24,7 +24,7 @@ When many replicates are available and each construct does not exist in all repl
 `combine_by_gene` implements both Stouffer's z-score method and Fisher's *p*-value method to combine the results of different constructs for the same gene.
 
 ### 6. KEGG pathway enrichment analysis
-Module `pathwayanalysis` includes tools for KEGG pathway enrichment analysis, gene id mapping, and for drawing the enriched pathways with nodes color-coded by provided values such as z-scores and fold changes. 
+Module `pathwayanalysis` includes tools for Gene Ontology (GO) and KEGG pathway enrichment analysis, gene id mapping, and for drawing the enriched pathways with nodes color-coded by provided values such as z-scores and fold changes. The enrichment analysis p-values are calculated by Bayesian method (the same function in presence/absence analysis without dilution (dilution factor set to 1)) to achieve more accurate and robust statistics.
 
 ## Installation
 ### Option 1
@@ -71,7 +71,7 @@ Additionally, `rosely` depends on some python packages.
 
 If you have pip3 installed (for python3), install them by pip3 can be done as:
 
-    sudo pip3 install scipy pandas matplotlib sklearn py2cytoscape biopython
+    sudo pip3 install scipy pandas matplotlib sklearn mygene biopython Pillow
     
 
 ### Install without root privileges
