@@ -5,10 +5,9 @@ Created on Jul 3, 2017
 '''
 import os, numpy as np
 import scipy.stats as ss
-from scipy.special import beta, betainc
+from scipy.special import betaln, betainc
 from scipy.integrate import quad # General purpose integration
 import matplotlib as mpl
-from numpy import dtype
 mpl.rc('font',family='Helvetica', weight='bold', size=14)
 import pickle, operator
 np.seterr(all='ignore')
@@ -18,7 +17,7 @@ from .neutralstats import *
 from collections import OrderedDict
 
 __all__ = ['CountReads', 'freqcdf', 'count_analysis', 'presence_absence_analysis', 'combine_by_gene',
-           'prepare_ttest_data', 'Result']
+           'prepare_ttest_data', 'Result', 'FreqCDF']
 
 default_cross_contamination_rate = 4.4186e-06; 
 # From Luciferase count in failed samples: 
@@ -261,7 +260,7 @@ class Result:
 #             subplot(122)
 #             plotx('n', vbs)
 
-def freqcdf(N1, X, N2, Y, r):
+def freqcdf(N1, X, N2, Y, r=1):
     '''Calculate the p-value (2-tailed) for the difference between frequencies X and Y in total trails of N1 and N2, 
     respectively, given a dilution ratio r (expected concentration of Y divided by X), using Bayesian inference.
     r is not simply the expected value of Y divided by that of X, but should be 
@@ -271,25 +270,32 @@ def freqcdf(N1, X, N2, Y, r):
         Obviously, yp could increase to infinity but the total number Y of cells being infected can at 
         most be N. Then, we say the concentration of Y is yp for simplicity: yp = -log(1 - E(Y)/N)
     '''
-    p1 = 1. / beta(X+1, N1-X+1)
-    p2 = 1. / beta(Y+1, N2-Y+1)
-    Et = 1 - beta(X+1, N1-X+1+r) / beta(X+1, N1-X+1)
+    lnb1 = betaln(X+1, N1-X+1)
+    lnb2 = betaln(Y+1, N2-Y+1)
+    Et = 1 - np.exp(betaln(X+1, N1-X+1+r) - betaln(X+1, N1-X+1)) # exp(log beta) increases numeric stability 
     s = np.sign(Y/N2 - Et)
-    def integrand(x, N1, X, N2, Y, r, s):
+    def integrand(x, N1, X, N2, Y, r, s, lnb):
         # ss.binom.cdf(X, N, p) == betainc(N-X, X+1, 1-p), but betainc accepts non-integer parameters.
         # However, betainc(0, ., .) and betainc(., 0, .) are nan because gamma(0) == 0
         if s <= 0:  # Decreased, accumulate from 0 to Y 
             b = betainc(max(1e-19, N2 - Y),  Y+1,  (1-x)**r)
         else:       # Increased, accumulate from Y to N2, or 1 - cdf(from 0 to Y-1)
             b = 1 - betainc(N2 - (Y-1),  max(1e-19, Y),  (1-x)**r)
-        return b * x ** X * (1 - x) ** (N1 - X)
-    I1 = quad(integrand, 0, 1, args=(N1, X, N2, Y, r, s))[0]
-    try: I2 = quad(integrand, 0, 1, args=(N2, Y, N1, X, 1/r, -s))[0]
+        return b * np.exp( X * np.log(x) + (N1 - X) * np.log(1 - x) - lnb)
+    points = [(X/N1 + Y/N2)/2, Et]
+    I1 = quad(integrand, 0, 1, args=(N1, X, N2, Y, r, s, lnb1), points=points)[0]
+    try: I2 = quad(integrand, 0, 1, args=(N2, Y, N1, X, 1/r, -s, lnb2), points=points)[0]
     except: print('N2, Y, N1, X, r, s = ', N2, Y, N1, X, r, s, sep=', ')
-    p = p1 * I1 + p2 * I2
+    p = I1 + I2
     if p > 1: p = 2 - p
     pval, z = p, -ss.norm.ppf(p/2) * s
     return pval, z
+
+class FreqCDF:
+    name = 'rosely.freqcdf'
+    def __init__(self): print('Switching to', self.name, 'for p-value calculation.')
+    def calc_pvalue(self, study_count, study_n, pop_count, pop_n):
+        return freqcdf(study_n, study_count, pop_n, pop_count, 1)[0]
 
 def presence_absence_analysis(presences1, N1, presences2, N2, controls = None, min_count=0, shared_presences=None, 
                               LFDRthr0=0.5, minr0=0, data_name='data', nbins=30, df_fit=5, **kwargs):
