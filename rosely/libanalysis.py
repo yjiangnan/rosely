@@ -8,6 +8,7 @@ import scipy.stats as ss
 from scipy.special import betaln, betainc
 from scipy.integrate import quad # General purpose integration
 import matplotlib as mpl
+from zmq.log.handlers import meth
 mpl.rc('font',family='Helvetica', weight='bold', size=14)
 import pickle, operator
 np.seterr(all='ignore')
@@ -41,7 +42,8 @@ class CountReads(object):
                 median of all samples, then it is considered a partial sample: min(1, p / (median - std))
         
     """
-    def __init__(self, filename, sep='\t', has_groups=True, cross_contamination_rate=default_cross_contamination_rate, **kwargs):
+    def __init__(self, filename, sep='\t', has_groups=True, cross_contamination_rate=default_cross_contamination_rate, 
+                 group_sample_sep='.', **kwargs):
         """filename: the path to the data file.
         The data file can either be a pickled tuple of (data, seqids) with file name ending with '.dat',
                           or a tab- or comma-(specified by sep) separated file of following format (header 
@@ -58,23 +60,25 @@ gene1.2,15,25,5,30
         self.data = {}; self.norm_samples = {}; self.references = {}; self.extra = {}
         self.filename = filename
         if '.dat' == filename[-4:]: self.read_pickled()
-        else: self.read_csv(sep, has_groups=has_groups, **kwargs)
+        else: self.read_csv(sep, has_groups=has_groups, group_sample_sep=group_sample_sep, **kwargs)
         for group in self.data: 
             for bc in self.data[group]: # barcode or sample name
-                self.samples[bc] = self.data[group][bc]
                 for seqid in self.seqids:
                     if seqid not in self.data[group][bc]: self.data[group][bc][seqid] = 0
         
     def read_pickled(self):
         with open(os.path.expanduser(self.filename),'rb') as f: self.data, self.seqids = pickle.load(f)
+        for group in self.data: 
+            for bc in self.data[group]: # barcode or sample name
+                self.samples[bc] = self.data[group][bc]
         
-    def read_csv(self, sep='\t', igroup=1, has_groups=True, **kwargs):
+    def read_csv(self, sep='\t', igroup=1, has_groups=True, group_sample_sep='.', **kwargs):
         if '.xls' in self.filename[-5:]: 
             csv = pd.read_excel(self.filename)
         else: csv = pd.read_csv(self.filename, sep=sep, **kwargs)
         self.seqids = list(csv.index); self.data = {}
         for sample in csv.keys():
-            if has_groups: spl = sample.split('.')
+            if has_groups: spl = sample.split(group_sample_sep)
             if has_groups and len(spl) <= 1:
                 print('Warning:', sample, 'is not included (saved in self.extra) because it cannot be separated into group and sample.')
                 self.extra[sample] = csv[sample]
@@ -104,6 +108,7 @@ gene1.2,15,25,5,30
             for bc in self.data[group]: 
                 sample = df[bc]
                 sample[sample <= self.threshold] = 0
+                self.data[group][bc] = sample
                 self.sample_presences[group][bc] = (sample>0).sum()
             median_presences = np.nanmedian(list(self.sample_presences[group].values()))
             std_presences = np.std(list(self.sample_presences[group].values()))
@@ -156,7 +161,7 @@ gene1.2,15,25,5,30
             self.normdata[group] = OrderedDict()
             for bc in self.data[group]:
                 nRef = nRefs[group, bc]
-                self.normdata[group][bc] = self.data[group][bc] / nRef * self.mean_reference
+                self.normdata[group][bc] = self.data[group][bc].loc[self.seqids] / nRef * self.mean_reference
             self.normdata[group] = pd.DataFrame(self.normdata[group])
         
     def get_data(self, bc, seqid):
@@ -189,7 +194,7 @@ gene1.2,15,25,5,30
                         self.data[group][sample][seqid] = 0
                         if seqid not in self.seqids: self.seqids.append(seqid)
                         
-    def quality_heatmap(self, groups='all', samples='all', vmin=0.8, **kwargs):
+    def quality_heatmap(self, groups='all', samples='all', vmin=0.8, transform='log1', **kwargs):
         if groups == 'all': groups = sorted(self.data)
         if samples == 'all': group_samples = [(g, s) for g in groups for s in self.data[g]]
         elif len(groups) == 1: group_samples = list(zip(groups * len(samples), samples))
@@ -201,7 +206,8 @@ gene1.2,15,25,5,30
             M[si][si] = 1
             for sj in group_samples[i+1:]:
                 vs = pd.DataFrame({0:self.normdata[si[0]][si[1]], 1:self.normdata[sj[0]][sj[1]]}).dropna()
-                r = np.corrcoef(vs[0], vs[1])[0][1]
+                if transform == 'log1': r = np.corrcoef(np.log(1+vs[0]), np.log(1+vs[1]))[0][1]
+                else: r = np.corrcoef(vs[0], vs[1])[0][1]
                 M[sj][si] = M[si][sj] = r
         import seaborn
         seaborn.heatmap(M.astype('float64'), vmin=vmin, **kwargs)
@@ -210,11 +216,18 @@ gene1.2,15,25,5,30
     
         
 class Result:
-    def __init__(self, ps, zs, LFDRthr0, data_name='data', nbins=30, df_fit=5, minr0=0, fine_tune=True, **kwargs):
+    def __init__(self, ps, zs, LFDRthr0, data_name='data', nbins=30, df_fit=5, minr0=0, fine_tune=True, neutralize=True, **kwargs):
         self.ps = ps; self.zs = zs
         self.results = OrderedDict()
-        self.neutralize_p_values(LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, 
-                                 minr0=minr0, fine_tune=fine_tune, **kwargs)
+        if neutralize:
+            self.neutralize_p_values(LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, 
+                                     minr0=minr0, fine_tune=fine_tune, **kwargs)
+        else: 
+            self.results['LFDR'] = locfdr(zs=zs, p0s=[0])
+            self.results['z-score'] = pd.Series(self.zs)
+            self.results['p-value'] = self.ps
+            self.results = pd.DataFrame(self.results).sort_values(by='p-value')
+            
         
     def neutralize_p_values(self, LFDRthr0, data_name='data', nbins=30, df_fit=5, minr0=0, fine_tune=True, **kwargs):
         self.nps, self.LFDR, self.pop = neup(self.ps, LFDRthr0=LFDRthr0, data_name=data_name,
@@ -298,7 +311,7 @@ class FreqCDF:
         return freqcdf(study_n, study_count, pop_n, pop_count, 1)[0]
 
 def presence_absence_analysis(presences1, N1, presences2, N2, controls = None, min_count=0, shared_presences=None, 
-                              LFDRthr0=0.5, minr0=0, data_name='data', nbins=30, df_fit=5, **kwargs):
+                              LFDRthr0=0.5, minr0=0, data_name='data', nbins=30, df_fit=5, neutralize=True, **kwargs):
     """Compare the difference between presences of two groups for each gene
     Args:
     presences1: dict: {'gene A':number of replicates gene A is present in for group1, ...}
@@ -328,14 +341,19 @@ def presence_absence_analysis(presences1, N1, presences2, N2, controls = None, m
         if seqid not in shared_presences: shared_presences[seqid] = 0
     ctrls = controls
     if controls is None: ctrls = seqids
-    nc1 = sorted([presences1[seqid] - shared_presences[seqid] for seqid in ctrls])
-    nc2 = sorted([presences2[seqid] - shared_presences[seqid] for seqid in ctrls])
-    l1 = len(nc1); l2 = len(nc2)
-    mean1 = np.mean(nc1[l1//4:l1//4*3]); mean2 = np.mean(nc2[l2//4:l2//4*3])
+    nc1 = np.array(sorted([presences1[seqid] - shared_presences[seqid] for seqid in ctrls]))
+    nc2 = np.array(sorted([presences2[seqid] - shared_presences[seqid] for seqid in ctrls]))
+    valid = np.logical_and(np.logical_and(nc1 > 0, nc2 > 0), np.logical_and(nc1 < N1*0.999, nc2 < N2*0.999))
+    vnc1 = nc1[valid]; vnc2 = nc2[valid]
+    l = len(vnc1)
+    if l < 10:
+        print('Two few constructs have >0 but not full sample counts. valid/total: {}/{}'.format(l, len(nc1))) 
+        raise Exception('')
+    mean1 = np.mean(vnc1[l//4:l//4*3]); mean2 = np.mean(vnc2[l//4:l//4*3])
     mdn = np.mean(list(shared_presences.values()))
     r = np.log(1 - mean2/(N2-mdn)) / np.log(1 - mean1/(N1-mdn))
-    print('N1: {:.2f}  N2: {:.2f}  25~75% mean1: {:.2f}  25~75% mean2: {:.2f}  mean shared: {:.2f}  MOI ratio: {:.2f}'.format(
-        N1, N2, mean1, mean2, mdn, r))
+    print('N1: {:.2f}  N2: {:.2f};  25~75% mean1: {:.2f}  25~75% mean2: {:.2f} in {} controls;   shared: {:.2f}  MOI ratio: {:.2f}'.format(
+        N1, N2, mean1, mean2, l, mdn, r))
     for seqid in seqids:
         dn = shared_presences[seqid]
         n1 = presences1[seqid]; n2 = presences2[seqid]; z = 0
@@ -344,7 +362,8 @@ def presence_absence_analysis(presences1, N1, presences2, N2, controls = None, m
         else: z = np.NaN; pval = np.NaN
         zs[seqid] = z
         ps[seqid] = pval
-    res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, **kwargs)
+    res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, 
+                 neutralize=neutralize, **kwargs)
     change = {}
     for seqid in ps: 
         change[seqid] = '{:.3f} --> {:.3f}'.format(
@@ -352,7 +371,7 @@ def presence_absence_analysis(presences1, N1, presences2, N2, controls = None, m
     res.results['presence change'] = pd.Series(change)
     return res
 
-def prepare_ttest_data(normdata_list, transform, minmean, sample_weights):
+def prepare_ttest_data(normdata_list, transform, minmean, sample_weights, paired):
     seqids = []
     weights = None
     if sample_weights is not None: weights = {}
@@ -370,12 +389,14 @@ def prepare_ttest_data(normdata_list, transform, minmean, sample_weights):
                 d1 = normdata[sample][seqid]
                 if transform == 'log':
                     if d1 >  0: ttestdata[seqid][-1].append(np.log2(d1))
+                    elif paired: ttestdata[seqid][-1].append(np.nan)
                 elif type(transform) is str and transform[:3] == 'log':
                     n0 = float(transform[3:])
                     if '.' not in transform[3:]: n0 = int(n0)
                     if str(n0) != transform[3:]: 
                         raise Exception('The string following log is not a well formated float number')
                     if d1 > -n0: ttestdata[seqid][-1].append(np.log2(n0 + d1))
+                    elif paired: ttestdata[seqid][-1].append(np.nan)
                 elif type(transform) is float:
                     ttestdata[seqid][-1].append(d1 ** transform)
                 else: raise Exception('transform has to be either log or a float number (power)')
@@ -387,11 +408,22 @@ def prepare_ttest_data(normdata_list, transform, minmean, sample_weights):
         if total/n < minmean: 
             del ttestdata[seqid]
             if sample_weights is not None: del weights[seqid]
+        if paired:
+            n = 0
+            d = ttestdata[seqid]
+            for j in range(len(d[-1]))[::-1]:
+                havenan = False
+                for i in range(len(d)): 
+                    if np.isnan(d[i][j]): havenan = True
+                if not havenan: n += 1
+                else:
+                    for i in range(len(d)): del d[i][j]
+            if n <= 1: del ttestdata[seqid]
     return ttestdata, weights
 
-def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, sample_weights=None,
+def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, sample_weights=None, minn=1.25,
                            paired=False, equalV=False,  debug=False, method='ascertained_ttest', pre_neutralize=True, 
-                           span=0.5, LFDRthr0=0.5, minr0=0, fine_tune=True,
+                           span=0.5, LFDRthr0=0.5, minr0=0, fine_tune=True, neutralize=True,
                            data_name='data', nbins=30, df_fit=5, **kwargs):
     """Analyze the counts by ascertained_ttest
     
@@ -414,20 +446,22 @@ def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, s
         pop:   power of p-values
     """
     if np.isnan(minmean) and transform == 'log1': minmean = 10
-    ttestdata, weights = prepare_ttest_data(normdata_list, transform, minmean, sample_weights)
+    ttestdata, weights = prepare_ttest_data(normdata_list, transform, minmean, sample_weights, paired=paired)
     if method=='ascertained_ttest':
         ps, zs, vbs = ascertained_ttest(ttestdata, [0, 1], controls, paired=paired, debug=True, weights=weights,
-                                        equalV=equalV, pre_neutralize=pre_neutralize, span=span)
+                                        equalV=equalV, pre_neutralize=pre_neutralize, span=span, minn=minn)
         dxs = vbs['dx']
     else: ps, zs, dxs, vbs = ttest(ttestdata, [0, 1], controls, paired=paired, weights=weights, equalV=equalV)
-    res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, fine_tune=fine_tune, **kwargs)
+    res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, 
+                 fine_tune=fine_tune, neutralize=neutralize, **kwargs)
     if debug: res.vbs = vbs
     nm = 'dx'
-    if 'log' in transform: nm = 'log2 fold change'
+    if type(transform) is str and 'log' in transform: nm = 'log2 fold change'
     res.results[nm] = pd.Series(dxs)
     return res
 
-def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=30, df_fit=5, power_of_pval=1, data_name='data'):
+def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=30, df_fit=5, power_of_pval=1, 
+                    data_name='data', method='Stouffer and Fisher'):
     """Combine different z-scores of the same gene into a single z-score and LFDR
     
     Args:
@@ -455,31 +489,39 @@ def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=30, df_fit=5, power
             gene_zs[g] = np.sum(gzs[g]) / len(gzs[g]) ** 0.5
             logps = np.log([2 * ss.norm.cdf(-abs(z)) for z in gzs[g]])
             gene_chi2ps[g] = 1 - ss.chi2.cdf(-2 * logps.sum(), 2 * len(gzs[g]))
-    SLFDR = locfdr(zs=gene_zs, p0s=p0s, nbins=nbins, df_fit=df_fit, zthreshold=1.5/power_of_pval, data_name=data_name + ' Stouffer')
-    lfdrs = np.array(list(SLFDR.values()))
-    print("Combine genes by Stouffer's Z-score method (opposite changes cancel out):")
-    if sum(lfdrs<LFDR0): print('gene    LFDR    shRNA : z-score')
-    else: print('No genes are found below LFDR of ', LFDR0)
-    items = [item for item in SLFDR.items() if abs(item[1])>=0] # remove NaN
-    LFDR = sorted(items, key=operator.itemgetter(1))
-    for g, lfdr in LFDR:
-        if lfdr < LFDR0: 
-            print(g, ' '*max(0, 8-len(g)), round(SLFDR[g], 3), end='  ', sep='')
-            for t in gene_targets[g]: print(t, ':', round(zs[t],2), ' '*max(0, 11-len(t)), end='')
-            print('')
-    print('')
-
-    FLFDR = locfdr(ps=gene_chi2ps, p0s=p0s, nbins=nbins, df_fit=df_fit, zthreshold=1.5/power_of_pval, data_name=data_name + ' Fisher')
-    lfdrs = np.array(list(FLFDR.values()))
-    print("Combine genes by p-values using Fisher's method (signs of change do not matter):")
-    if sum(lfdrs<LFDR0): print('gene    LFDR    shRNA : z-score')
-    else: print('No genes are found below LFDR of ', LFDR0)
-    items = [item for item in FLFDR.items() if abs(item[1])>=0] # remove NaN
-    LFDR = sorted(items, key=operator.itemgetter(1))
-    for g, lfdr in LFDR:
-        if lfdr < LFDR0: 
-            print(g, ' '*max(0, 8-len(g)), round(FLFDR[g], 3), end='  ', sep='')
-            for t in gene_targets[g]: print(t, ':', round(zs[t],2), ' '*max(0, 11-len(t)), end='')
-            print('')
-    print('')
-    return pd.DataFrame({'combined z':gene_zs, 'Stouffer LFDR':SLFDR, 'Fisher LFDR':FLFDR})
+    df = {'combined z':gene_zs}
+    if 'Stouffer' in method:
+        dn = data_name
+        if 'Fisher' in data_name: dn += ' Stouffer'
+        SLFDR = locfdr(zs=gene_zs, p0s=p0s, nbins=nbins, df_fit=df_fit, zthreshold=1.5/power_of_pval, data_name=data_name)
+        lfdrs = np.array(list(SLFDR.values()))
+        print("Combine genes by Stouffer's Z-score method (opposite changes cancel out):")
+        if sum(lfdrs<LFDR0): print('gene    LFDR    shRNA : z-score')
+        else: print('No genes are found below LFDR of ', LFDR0)
+        items = [item for item in SLFDR.items() if abs(item[1])>=0] # remove NaN
+        LFDR = sorted(items, key=operator.itemgetter(1))
+        for g, lfdr in LFDR:
+            if lfdr < LFDR0: 
+                print(g, ' '*max(0, 8-len(g)), round(SLFDR[g], 3), end='  ', sep='')
+                for t in gene_targets[g]: print(t, ':', round(zs[t],2), ' '*max(0, 11-len(t)), end='')
+                print('')
+        df['Stouffer LFDR'] = SLFDR
+        print('')
+    elif 'Fisher' in method:
+        dn = data_name
+        if 'Stouffer' in data_name: dn += ' Fisher'
+        FLFDR = locfdr(ps=gene_chi2ps, p0s=p0s, nbins=nbins, df_fit=df_fit, zthreshold=1.5/power_of_pval, data_name=data_name)
+        lfdrs = np.array(list(FLFDR.values()))
+        print("Combine genes by p-values using Fisher's method (signs of change do not matter):")
+        if sum(lfdrs<LFDR0): print('gene    LFDR    shRNA : z-score')
+        else: print('No genes are found below LFDR of ', LFDR0)
+        items = [item for item in FLFDR.items() if abs(item[1])>=0] # remove NaN
+        LFDR = sorted(items, key=operator.itemgetter(1))
+        for g, lfdr in LFDR:
+            if lfdr < LFDR0: 
+                print(g, ' '*max(0, 8-len(g)), round(FLFDR[g], 3), end='  ', sep='')
+                for t in gene_targets[g]: print(t, ':', round(zs[t],2), ' '*max(0, 11-len(t)), end='')
+                print('')
+        df['Fisher LFDR'] = FLFDR
+        print('')
+    return pd.DataFrame(df)

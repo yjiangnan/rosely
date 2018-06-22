@@ -16,4 +16,6 @@ try:
 except:
     if sys.version_info >= (3, 0): raise
 
-print('Rosely version: 1.2.1')
+print('Rosely version: 1.2.2')
+from datetime import datetime as _datetime, timezone as _timezone
+print('import time:', str(_datetime.now(_timezone.utc).astimezone())) # Documentation purpose

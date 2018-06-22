@@ -20,10 +20,10 @@ from .neutralstats import density, poisson_regression, neup
 __all__ = ['ascertained_ttest', 'mean_median_norm', 'ttest', 'ttest2', 'z_score_for_ttest_p_val']
 
 
-def ttest(data, idxes, controls=None, paired=False, weights=None, equalV=False):
+def ttest(data, idxes, controls=None, paired=False, weights=None, equalV=False, minn = 1.25):
     ms = {}; mvns = {}; ws = {}; dxs = {}
     pvals = {}; zs = {}
-    ctrls = controls; minn = 1.25
+    ctrls = controls
     if controls is None: ctrls = data.keys()
     def weighted_mean(ds, ws): 
         n = sum(ws)
@@ -88,7 +88,7 @@ def ttest(data, idxes, controls=None, paired=False, weights=None, equalV=False):
     return pvals, zs, dxs, mvns
 
 def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, weights=None, span=0.8,
-                      debug=False, equalV=False, pre_neutralize=True):
+                      debug=False, equalV=False, pre_neutralize=True, minn = 1.25):
     """
     data is a dict with id (eg. shRNA, gene) as keys and a list of readouts of different experimental conditions indexed by idxes.
     eg.: 
@@ -110,7 +110,7 @@ def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, weights=N
     """
     vbs = {}
     pvals = {}; zs = {}; pops = {}
-    tps, _, dxs, mvns = ttest(data, idxes, controls, paired, weights, equalV)
+    tps, _, dxs, mvns = ttest(data, idxes, controls, paired, weights, equalV, minn)
     mns = [np.nanmean([mvns[idx][gene][2] for gene in mvns[idx]]) for idx in idxes[:len(idxes)-paired]]
     if len(idxes) == 2:
         _, _, pops[0] = neup(tps, with_plot=False, minr0=0, fine_tune=False)

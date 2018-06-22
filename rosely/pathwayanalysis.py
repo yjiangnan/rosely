@@ -147,7 +147,11 @@ def getGeneId(genes, scopes='ensemblgene,symbol', species='mouse', taxid=None):
     if corrected: print('')
     raw = downloadMyGeneInfo(gs, scopes=scopes, species=taxid)
     for r in raw: 
-        r['query'] = idmap[r['query']]
+        try: r['query'] = idmap[r['query']]
+        except:
+            for m in idmap:
+                if r['query'] in m.split(','): r['query'] = idmap[m]
+                if r['query'] in m.split(';'): r['query'] = idmap[m]
     ids = pd.DataFrame(raw)
     ids = ids[~ids['entrezgene'].isnull()]
     ids = ids.loc[ids.groupby('query')['_score'].idxmax()]
@@ -165,10 +169,15 @@ def getGeneId(genes, scopes='ensemblgene,symbol', species='mouse', taxid=None):
     df['geneid'] = df['geneid'].astype('int')
     return df
 
-def draw_kegg_pathways(pathways, DEG_results, LFDR_cutoff=0.4, colorcolumn='Controlled z-score', folder=None, cutoff=0):
+def draw_kegg_pathways(pathways, DEG_results, colorcolumn='Controlled z-score', folder=None, overlap_cutoff=0):
+    """
+    pathways: a pandas DataFrame indexed by path:id and ordered by decreasing statistical significance, with column 'Pathways'.
+    DEG_results: a pandas DataFrame indexed by entrezgene and has a column `symbol` and a column for color values.
+    overlap_cutoff: a cutoff value for displaying the gene symbols of genes co-localized in the same box of KEGG pathways.
+    """
     if folder is not None and not os.path.isdir(folder): os.mkdir(folder)
     for (i, path) in enumerate(pathways.index):
-        drawPathway(DEG_results, path, colorcolumn, cutoff=cutoff,
+        drawPathway(DEG_results, path, colorcolumn, cutoff=overlap_cutoff,
                     filename = os.path.join(folder, ("%02d. " % i) + pathways['Pathways'][path] + '_' + path.split(':')[-1]))
 
 BLUE = np.array([0, 0, 255]); RED = np.array([255, 0, 0]); WHITE = np.array([255, 255, 255])
@@ -183,9 +192,6 @@ def value2color(v, vmax, pwr):
     return int(color[0]+0.5), int(color[1]+0.5), int(color[2]+0.5)
 
 def drawPathway(data, pathwayId, colorcolumn = 'color value', cutoff=0, power = 3, filename=None):
-    """
-    data: a pandas DataFrame indexed by entrezgene and has a column `symbol` and a column for color values.
-    """
     from PIL import Image, ImageDraw, ImageFont
     keggpath = os.path.join('kegg', pathwayId)
     if not os.path.isdir('kegg'): os.mkdir('kegg')
@@ -229,13 +235,24 @@ def drawPathway(data, pathwayId, colorcolumn = 'color value', cutoff=0, power = 
                 if gene in genesfound:
                     symbol = data.loc[gene]['symbol']
                     newval = data[colorcolumn][gene]
-                    if abs(newval) > abs(value): value = newval
+                    try:
+                        if abs(newval) > abs(value): value = newval
+                    except ValueError:  # Possible when a gene id matches multiples rows in data.
+                        mx = max(newval.abs())
+                        newval = list(newval[newval.abs()==mx])[0]
+                        if abs(newval) > abs(value): value = newval
                     nv += 1
                     if samepos==False or (abs(newval) < cutoff and abs(value) == abs(newval)):
-                        x = float(entry[0].get('x'))
-                        y = float(entry[0].get('y'))
-                        width = float(entry[0].get('width'))
-                        height = float(entry[0].get('height'))
+                        try: 
+                            x = float(entry[0].get('x'))
+                            y = float(entry[0].get('y'))
+                            width = float(entry[0].get('width'))
+                            height = float(entry[0].get('height'))
+                        except:
+                            if entry[0].get('type') == 'line': 
+                                x1, y1, x2, y2 = [float(c) for c in entry[0].get('coords').split(',')]
+                                x = (x1 + x2) / 2; y = (y1 + y2) / 2; width = 1; height = 1
+                            else: print(entry[0].get('type'), 'is not implemented yet.'); raise 
                         elem = {'name':[symbol], 'x':x, 'y':y, 'w':width, 'h':height}
                         if samepos: changed[-1] = elem
                         else: changed.append(elem)
