@@ -1,11 +1,11 @@
 import pandas as pd
-from scipy.special import betainc
+from scipy.special import betainc, gammaln
 from collections import OrderedDict
-from .neutralstats import locfdr
-from .libanalysis import freqcdf
+# from scipy.optimize import fsolve
 import requests, os, re, time
 import numpy as np
 import xml.etree.cElementTree as et
+from .neutralstats import locfdr
 
 try:
     from Bio.KEGG import REST
@@ -48,35 +48,55 @@ def load_all_kegg_pathways(species_code='mmu'):
     if os.path.isfile(fn):
         with open(fn, 'rb') as fh: pathways = pickle.load(fh)
     else:
-        pathways = download_all_kegg_pathways(species_code='mmu')
+        pathways = download_all_kegg_pathways(species_code=species_code)
         with open(fn, 'wb') as fh: pickle.dump(pathways, fh)
     return pathways
 
 def enrichment_p_value(Ltop, n, Lpop, N):
     """
     n out of Ltop genes in top list, while N out of Lpop genes in background (population).
-    Assume that Lpop is large and N/Lpop is an accurate estimate of probability for occurence.
-    
-    ss.binom.cdf(X, N, p) == betainc(N-X, X+1, 1-p)
     """
-    p = 1 - betainc(Ltop-(n+0.25-1), n+0.25, 1 - N/Lpop) # 0.25 is added to avoid p > 0.5
-    p = min(1, 2 * p)
-    return p
+    def chooseln(N, k):
+        return gammaln(N+1) - gammaln(N-k+1) - gammaln(k+1)
+    logL = chooseln(Lpop, Ltop)
+    p = 0
+    if n / N >= Ltop / Lpop:
+        for i in range(n, N+1):
+            p += np.exp(chooseln(N, i) + chooseln(Lpop-N, Ltop-i) - logL)
+    else:
+        for i in range(n+1):
+            p += np.exp(chooseln(N, i) + chooseln(Lpop-N, Ltop-i) - logL)
+    return p * 2
 
-def enrichment_analysis(top_genes, population, pathways, tosymbols=None, values=None, valuename='', key='geneid', nbins=30):
+def enrichment_analysis(top_genes, population, pathways, tosymbols=None, values=None, valuename='', key='geneid', 
+                        nbins=30, zthreshold=3, **kwargs):
     Ltop = len(top_genes); Lpop = len(population)
-    ps = {}; ns = {}; Ns = {}; enpath = {}; genes = {}; fold = {}
+    ps = {}; ns = {}; Ns = {}; genes = {}; fold = {}; pathname = {}; str_ns = {}; str_Ns = {}
+    def func(n, N, p): # cdf-0.5 of n observations in N 
+        return betainc(max(1e-19, N - n),  n+1,  (1-p)) - 0.5
     for pw in pathways:
         symbol = set(pathways[pw][key])
         gs = list(symbol.intersection(top_genes))
         n = len(gs)
+        if n < 2: continue
         N = len(symbol.intersection(population))
-        if N > 1 and n / (1+Ltop) >= N / Lpop:
-            ps[pw] = freqcdf(Ltop, n, Lpop, N, 1)[0]
-            if not 0<=ps[pw]<=1: print('p value error:', ps[pw], Ltop, n, Lpop, N)
-            ns[pw] = str(n)+' / '+str(Ltop)
-            Ns[pw] = str(N)+' / '+str(Lpop)
-            enpath[pw] = pathways[pw]['name'].split(' - ')[0]
+        if N > 4: #and n / (1e-11+Ltop) >= N / Lpop:
+#             ps[pw] = freqcdf(Ltop, n, Lpop, N, 1)[0]
+#             p = Ltop/Lpop
+#             try: En = fsolve(func, x0 = 0.01, args=(N, p))[0]
+#             except:
+#                 try: En = fsolve(func, x0 = N*p, args=(N, p))[0] 
+#                 except: print('enrichment_analysis: The iteration is not making good progress:', n, N, p)
+#             if n < En: 
+#                 ps[pw] =      betainc(max(1e-19, N - n+0.25),  n+0.75,  (1-p))  * 2 # deplete
+#             else: 
+#                 ps[pw] = (1 - betainc(max(1e-19, N - n+0.75),  n+0.25,  (1-p))) * 2 # enrichment
+            ps[pw] = enrichment_p_value(Ltop, n, Lpop, N)
+            if not 0<=ps[pw]<=1.0: ps[pw] = 2 - ps[pw]
+            ns[pw] = n; Ns[pw] = N
+            str_ns[pw] = str(n)+' / '+str(Ltop)
+            str_Ns[pw] = str(N)+' / '+str(Lpop)
+            pathname[pw] = pathways[pw]['name'].split(' - ')[0]
             if tosymbols is not None:
                 gs0 = gs
                 if values is not None: vs = [values[g] for g in gs]
@@ -88,16 +108,15 @@ def enrichment_analysis(top_genes, population, pathways, tosymbols=None, values=
             else:
                 genes[pw] = ', '.join(gs) 
             fold[pw] = round((n/Ltop) / (N/Lpop), 2)
-    ps = pd.Series(ps)
-    ps = (ps / ps.max()).to_dict()
-    fdr = locfdr(ps, nbins=nbins, p0s=[0,])
-    pathname = 'Pathways'
-    if 'GO:' == pw[:3]: pathname = 'GO terms'
+    ps = pd.Series(ps); ps[ps>1] = 1; ns = pd.Series(ns); fold = pd.Series(fold)
+    lfdr = locfdr(ps[ns>1], p0s=[0], nbins=nbins, zthreshold=zthreshold, **kwargs)
+    pathlabel = 'Pathways'
+    if 'GO:' == pw[:3]: pathlabel = 'GO terms'
     if valuename != '': valuename = ' & ' + valuename
-    enriched = pd.DataFrame(OrderedDict({pathname:enpath, 'p value':ps, 'LFDR':fdr, 
-                                   'study':ns, 'background':Ns, 'enrich fold':fold,
+    enriched = pd.DataFrame(OrderedDict({pathlabel:pathname, 'LFDR':lfdr, 
+                                   'p value':ps, 'study':str_ns, 'background':str_Ns, 'enrich fold':fold, 'n':ns, 'N':Ns,
                                    key+valuename:genes})).sort_values(by='p value')
-
+    enriched = enriched[enriched['enrich fold']>1]
     return enriched
 
 def downloadMyGeneInfo(genes, scopes, species):
@@ -172,13 +191,13 @@ def getGeneId(genes, scopes='ensemblgene,symbol', species='mouse', taxid=None):
 def draw_kegg_pathways(pathways, DEG_results, colorcolumn='Controlled z-score', folder=None, overlap_cutoff=0):
     """
     pathways: a pandas DataFrame indexed by path:id and ordered by decreasing statistical significance, with column 'Pathways'.
-    DEG_results: a pandas DataFrame indexed by entrezgene and has a column `symbol` and a column for color values.
+    DEG_results: a pandas DataFrame indexed by entrezgene and has a column `symbol` and a column for color values specified by `colorcolumn`.
     overlap_cutoff: a cutoff value for displaying the gene symbols of genes co-localized in the same box of KEGG pathways.
     """
     if folder is not None and not os.path.isdir(folder): os.mkdir(folder)
     for (i, path) in enumerate(pathways.index):
         drawPathway(DEG_results, path, colorcolumn, cutoff=overlap_cutoff,
-                    filename = os.path.join(folder, ("%02d. " % i) + pathways['Pathways'][path] + '_' + path.split(':')[-1]))
+                    filename = os.path.join(folder, ("%02d. " % (i+1)) + pathways['Pathways'][path] + '_' + path.split(':')[-1]))
 
 BLUE = np.array([0, 0, 255]); RED = np.array([255, 0, 0]); WHITE = np.array([255, 255, 255])
 def value2color(v, vmax, pwr):
@@ -278,6 +297,7 @@ def drawPathway(data, pathwayId, colorcolumn = 'color value', cutoff=0, power = 
     for gene in changed:
         x = gene['x']; w = gene['w']; y = gene['y']; h = gene['h']; nr = len(gene['name'])
         for i in range(nr):
-            draw.text((x-w/2+5+(7-len(gene['name'][i]))*3, y-h*(nr/2-i)*0.7), gene['name'][i], (0,60,0), font=font)
+            try: draw.text((x-w/2+5+(7-len(gene['name'][i]))*3, y-h*(nr/2-i)*0.7), gene['name'][i], (0,60,0), font=font)
+            except: print(gene['name'][i], 'is not str and cannot be used as gene name.')
     if filename is None: im2.show()
     else: im2.save(filename + ".png")

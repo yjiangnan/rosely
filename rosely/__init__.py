@@ -1,12 +1,13 @@
 try:
     import imp, sys
-    from . import neutralstats, ascertainedttest, libanalysis, lowess, pathwayanalysis
+    from . import neutralstats, ascertainedttest, libanalysis, lowess, pathwayanalysis, integral
     if sys.version_info >= (3, 0):
         imp.reload(lowess)
         imp.reload(neutralstats)
         imp.reload(ascertainedttest)
         imp.reload(libanalysis)
         imp.reload(pathwayanalysis)
+        imp.reload(integral)
     
     from .lowess import loess_fit
     from .ascertainedttest import *

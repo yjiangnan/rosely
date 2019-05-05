@@ -8,162 +8,371 @@ Created on Jun 13, 2017
 @author: Jiang-Nan Yang
 '''
 
-import scipy.stats as ss
+import scipy.stats as ss, pandas as pd
 from .lowess import loess_fit
+from pylab import *
 import numpy as np, warnings
 from scipy.optimize import minimize, fsolve
-from scipy.special import gammaln, polygamma
+from scipy.special import gammaln, polygamma, gammainc
 from scipy.integrate import quad
+import scipy.linalg
+from multiprocessing.pool import Pool
+import psutil
+from _functools import partial
 warnings.filterwarnings("error", category=RuntimeWarning)
-from .neutralstats import density, poisson_regression, neup
+from .neutralstats import neup
+from . import integral as itg
 
-__all__ = ['ascertained_ttest', 'mean_median_norm', 'ttest', 'ttest2', 'z_score_for_ttest_p_val']
+__all__ = ['ascertained_ttest', 'mean_median_norm', 'segmented_mean_median_norm', 'ttest', 'ttest2', 'itg']
 
-
-def ttest(data, idxes, controls=None, paired=False, weights=None, equalV=False, minn = 1.25):
-    ms = {}; mvns = {}; ws = {}; dxs = {}
-    pvals = {}; zs = {}
-    ctrls = controls
-    if controls is None: ctrls = data.keys()
-    def weighted_mean(ds, ws): 
-        n = sum(ws)
-        if n == 0: return np.nan
-        return sum([d*w for (d, w) in zip(ds, ws)]) / n
-    for idx in idxes:
-        if weights is None:
-            allms = [np.mean(data[gene][idx]) for gene in data if len(data[gene][idx]) and gene in ctrls]
-        else:
-            allms = [weighted_mean(data[gene][idx], weights[gene][idx])
-                     for gene in data if len(data[gene][idx]) and gene in ctrls]
-        if controls is None: # The mean across samples
-            ms[idx] = np.mean(sorted(allms)[len(allms)//3 : len(allms)//3*2])
-        else:
-            ms[idx] = np.mean(sorted(allms)[len(allms)//5 : len(allms)//5*4])
-        pvals[idx] = {}; zs[idx] = {}; dxs[idx] = {}
-    if paired:
-        for i in range(len(idxes[:-1])):
-            idx0 = idxes[i]; idx1 = idxes[i+1]
-            mvns[idx0] = {}
-            for gene in data:
-                ds = np.array(data[gene][idx1]) - data[gene][idx0] - (ms[idx1] - ms[idx0])
-                if weights is None: ws = [1] * len(ds)
-                else: ws = weights[gene][idx0]
-                m = weighted_mean(ds, ws); n = sum(ws)
-                v = sum([(d-m)**2 * w for (d,w) in zip(ds, ws)]) / (n - 1)
-                mvns[idx0][gene] = [m, v, n]
-        for idx in idxes[:-1]:
-            for gene in data:
-                m, v, n = mvns[idx][gene]
-                t = m / (v/n)**0.5
-                p = ss.t.cdf(-abs(t), n-1) * 2
-                z = z_score_for_ttest_p_val(t, p)
-                dxs[idx][gene] = m
-                if v == 0:
-                    p = np.nan; z = np.nan
-                pvals[idx][gene] = p; zs[idx][gene] = z
-    else:
-        for idx in idxes: 
-            mvns[idx] = {}
-            for gene in data:
-                ds = data[gene][idx]
-                if weights is None: ws = [1] * len(ds)
-                else: ws = weights[gene][idx]
-                m = weighted_mean(ds, ws); n = sum(ws)
-                v = sum([(d-m)**2 * w for (d,w) in zip(ds, ws)]) / (n - 1)
-                if n >= minn:
-                    mvns[idx][gene] = [m - ms[idx], v, n]
-                else: mvns[idx][gene] = [np.nan] * 3
-        for gene in data:
-            for i in range(len(idxes[:-1])):
-                idx = idxes[i]; idx1 = idxes[i+1]
-                m0, v0, n0 = mvns[idx ][gene]
-                m1, v1, n1 = mvns[idx1][gene]
-                dx = m1 - m0
-                t, p = ttest2(dx, v0, n0, n0, v1, n1, n1, equalV)
-                z = z_score_for_ttest_p_val(t, p)
-                dxs[idx][gene] = dx
-                if v0 + v1 == 0: p = np.nan; z = np.nan
-                pvals[idx][gene] = p; zs[idx][gene] = z
-    if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]; dxs = dxs[idxes[0]]
-    return pvals, zs, dxs, mvns
-
-def ascertained_ttest(data, idxes=[0, 1], controls=None, paired=False, weights=None, span=0.8,
-                      debug=False, equalV=False, pre_neutralize=True, minn = 1.25):
+def partial_ridge_sva_residual(data, controls, nSV, penaltyRatioToSV=0., get_SVA_pop=True, ridge=False, parallel=True):
     """
-    data is a dict with id (eg. shRNA, gene) as keys and a list of readouts of different experimental conditions indexed by idxes.
+    Surrogate variable analysis:
+    An improved and explicit surrogate variable analysis procedure by coefficient adjustment
+        Seunggeun Lee Wei Sun Fred A. Wright Fei Zou
+    Biometrika, Volume 104, Issue 2, 1 June 2017, Pages 303–316, https://doi.org/10.1093/biomet/asx018
+    
+    Ridge regression:
+    Boonstra PS, Mukherjee B, and Taylor JMG (2015). 
+    "A small-sample choice of the tuning parameter in ridge regression." Statistica Sinica 25, 1185-1206
+    
+    For partial ridge regression (ridge=True), we could apply a penalty only to the surrogate variables by  
+    setting penaltyRatioToSV=0 to avoid their unnecessary removal of variations resulted from the design 
+    variables and avoid problems of multicollinearity. 
+    
+    nSV: number of Surrogate Variables to use
+    """
+    dt = data.loc[controls].dropna().transpose()
+#     i0 = 100
+#     for i in range(i0, i0+200): 
+#         dt.loc[0, 0][i] += (i-i0+50)/50.; dt.loc[0, 1][i] -= (i-i0+50)/50.; 
+#         dt.loc[1, 1][i] -= (i-i0+50)/50.
+    X0 = np.array([(k[0], 1.) for k in list(dt.index)])
+    X = X0 + 0.
+    for i in range(X.shape[1] - 1):
+        X[:, i] -= np.mean(X[:, i])
+        X[:, i] /= np.std (X[:, i])
+    inv = np.linalg.inv
+    XXX = inv(X.T @ X) @ X.T
+    Bh = XXX @ dt
+    M = X @ XXX
+    R = (np.eye(M.shape[0]) - M) @ dt
+    
+    U, _, _ = scipy.linalg.svd(R)
+    Uq = U[:, :nSV]
+    F = inv(Uq.T @ Uq) @ Uq.T @ R
+    J = np.ones((F.shape[1], 1))
+    IMJFt = (np.eye(F.shape[1]) - J @ inv(J.T @ J) @ J.T) @ F.T
+    S = Uq + X @ Bh @ IMJFt @ inv(F @ IMJFt) # S is the surrogate variables
+#     print('Surrogate Variables:')
+#     print(S)
+    
+    for i in range(S.shape[1]): # Standardize surrogate variables.
+        S[:, i] -= np.mean(S[:, i])
+        S[:, i] /= np.std (S[:, i])
+    XS1 = np.concatenate((X0, S), axis=1)
+    B = []
+    ses = []; #Fs = []
+    values = data.get_values()
+    ys = (values - np.nanmean(values, axis=1)[:, np.newaxis]).tolist()
+    nparam =  XS1.shape[1]
+    dfes = (data.notnull().sum(axis=1).values - nparam).tolist()
+    XS0 = np.concatenate((X[:, :-1], S), axis=1)
+    XSXS0 = XS0.T @ XS0; I0 = np.eye(XS0.shape[0])
+    XS1XS1 = XS1.T @ XS1
+    
+    ptrg = partial(partial_ridge, X=X, S=S, XS0=XS0, XSXS0=XSXS0, XS1=XS1, XS1XS1=XS1XS1, I0=I0, 
+                        ridge=ridge, nSV=nSV, nparam=nparam, penaltyRatioToSV=penaltyRatioToSV, 
+                        get_SVA_pop=get_SVA_pop)
+    if parallel:
+        pool = Pool(psutil.cpu_count(logical=False))
+        results = pool.map(ptrg, zip(ys, values, dfes))
+        pool.close()
+    else: results = [ptrg(p) for p in zip(ys, values, dfes)]
+    for (beta, se) in results:
+        B.append(beta); ses.append(se)
+    B = np.transpose(B)
+    pop = None
+    if get_SVA_pop:
+        pvals = 2*(ss.t.cdf(-np.abs(B[0]/ses), dfes))
+#         pF = ss.f.cdf(1/np.array(Fs), dfes, nparam-1)
+        _, _, pop = neup(pvals, with_plot=False, minr0=0, fine_tune=False, data_name='SVA ridge')
+        print('SVA pop of design variable'+' for ridge regression'*ridge+':', pop)
+    sum_inv_counts = sum([1. / X0[:,0].tolist().count(x) for x in set(X0[:,0])])
+    scale_var = (data.T - XS1 @ B).var(axis=0, ddof=2) * sum_inv_counts / (np.array(ses)**2)
+    res = data.T - S @ B[X.shape[1]:, :]
+    return res.T, pop, scale_var
+
+def partial_ridge(params, X, S, XS0, XSXS0, XS1, XS1XS1, I0, ridge, nSV, nparam, 
+                  penaltyRatioToSV, get_SVA_pop):
+    y, y0, dfe = params
+    valid = np.logical_not(np.isnan(y))
+    inv = np.linalg.inv
+    if ridge:
+        def ridge_GCVc(lmd): # return errors of the generalized cross validation.
+            lmd = lmd[0]
+            L = np.diag([lmd * penaltyRatioToSV] * (X.shape[1]-1) + [lmd] * nSV)
+            P = XS @ inv(XSXS + L) @ XS.T
+            IP2 = (I - P) @ (I - P)
+            e = np.log(y @ IP2 @ y) - 2 * np.log(max(1e-99, 1 - np.trace(P)/n - 2./n))
+            return e
+        n = valid.sum()
+        if n > nparam:
+            y = np.array(y)[valid]
+            if n == len(y0): 
+                XS = XS0; XSXS = XSXS0; I = I0
+            else: 
+                XS = np.concatenate((X[valid, :-1], S[valid, :]), axis=1)
+                XSXS = XS.T @ XS
+                I = np.eye(n)
+            lmda = minimize(ridge_GCVc, 1, bounds=[(0.0001, 200)]).x[0]
+        else:
+            lmda = np.nan
+    else: lmda = 0
+    L = np.diag([lmda * penaltyRatioToSV / 4] * X.shape[1] + [lmda] * nSV)
+    # /4 is used because std of the original X0 is only 0.5, beta would then be doubled
+    if all(valid):
+        D = inv(XS1XS1 + L) @ XS1.T
+    else:
+        XS1v = XS1[valid, :]
+        D = inv(XS1v.T @ XS1v + L) @ XS1v.T
+    beta = D @ y0[valid]; se = None
+    if get_SVA_pop:
+        yhat = XS1 @ beta
+        yhat[~valid] = np.nan
+        sse = np.nansum((y0-yhat)**2); #   % sum of squared errors
+    #             ssr = np.nansum((yhat-np.nanmean(y0))**2); #   % sum of squared errors
+    #             sst = np.nansum((y0-np.nanmean(y0))**2); #   % sum of squared errors
+    #             Rsq = ssr/sst;
+    #             F = Rsq*dfe/(1-Rsq)/(nparam-1)
+    #             Fs.append(F)
+        mse = sse/dfe;
+        if dfe>0: se = (D[0] @ D[0] * mse) ** 0.5  # http://web.as.uky.edu/statistics/users/pbreheny/764-F11/notes/9-1.pdf
+        else: se = np.nan
+    #             if not all(valid):
+    #                 pF = ss.f.cdf(1/F, dfe, nparam-1)
+    #                 p  = 2*(ss.t.cdf(-abs(beta[0]/se), dfe))
+    return beta, se
+
+def cross_group_normalization(data, idxes, controls):
+    allms = []
+    for i in idxes:       
+        ms = data[i].loc[controls].mean(axis=1)
+        allms.append(ms.mean())
+    mall = mean(allms)
+    for i in idxes:
+        data[i] += mall - allms[i]
+    return data
+
+def normalize_by_least_change(data, equalV, min_pval, weights, paired):
+    idxes = data.columns.levels[0].tolist()
+    means = data.mean(axis=1).values
+    vs = means.copy()
+    vs.sort()
+    included = (means > vs[len(vs)//3]) & (means < vs[len(vs)//4*3])
+    mvns = calc_mvns(data, weights, paired)
+    _, pvals, _ = calc_ttest_stats(mvns, paired, equalV, need_z=False)
+    for idx in idxes[:-1]:
+        ps = pvals[idx]
+        nps, _, _ = neup(np.array(ps), with_plot=False, minr0=0, fine_tune=False)
+        included = np.logical_and(nps > min_pval, included)
+    for idx in idxes: # means of groups are calculated separately in case of sample size difference 
+        in_sample_means = data[idx][included].mean()
+        null = in_sample_means.isnull()
+        in_sample_means[null] = data[idx][in_sample_means[null].index].mean()
+        data[idx] += in_sample_means.mean() - in_sample_means # cross-sample normalization
+    nd = cross_group_normalization(data, idxes, data[included].index)
+    return nd, data[included].index
+
+def calc_mvns(data, weights, paired, scale_var=1, repeat=1):
+    idxes = data.columns.levels[0].tolist()
+    mvns = {}
+    for i in range(len(idxes) - paired):
+        idx = idxes[i]
+        if paired:
+            md = (data[idx+1] + data[idx]) * 0.5
+            dd = data[idx+1] - data[idx]
+        else: 
+            md = dd = data[idx]
+        mvn = {}
+        if weights is None:
+            mdd = dd.mean(axis=1).values
+            for _ in range(repeat):
+                SE = (dd.values - mdd[:, None])**2
+                SSE = np.nansum(SE, axis=1)
+                valid = SSE > 0
+                w = 1 / np.nanmean(SE[valid] / SSE[valid, None], axis=0)
+                w = w * w.sum() / (w*w).sum() 
+                # https://stats.stackexchange.com/questions/71081/degrees-of-freedom-for-a-weighted-average
+                mvn['n'] = (dd.notnull() * w).sum(axis=1)
+                m = mdd  = np.nansum(dd * w, axis=1) / mvn['n']
+        else:
+            if weights == False:
+                w = np.ones((dd.shape[1],))
+            else: 
+                w = weights[idx]
+                if paired: w = w * weights[idx+1]
+            mvn['n'] = (dd.notnull() * w).sum(axis=1)
+            m = mdd = np.nansum(dd * w, axis=1) / mvn['n']
+        if paired or repeat==0: m = np.nansum(md * w, axis=1) / mvn['n']
+        if paired:
+            dx = data[idx+1] - data[idx]
+            mdx = np.nansum(dx * w, axis=1) / mvn['n']
+            SSE = np.nansum(((dx.values - mdx[:, None])**2), axis=1)
+            mvn['mdx'] = pd.Series(mdx, index=dx.index)
+        else:
+            SSE = np.nansum(((dd.values - mdd[:, None])**2), axis=1)
+        mvn['m'] = pd.Series(m, index=dd.index)
+        # We do not use weighted variance due to its bias in the yeast WT data.
+        # Low pops were resulted in when using weighted variance even when
+        # V was adjusted by w.sum() - 1 instead of len(samples) - 1.
+        # It is unclear whether variance of variances is biased.
+        # But smaller ns would result in large expected sampling variance and 
+        # much smaller prior variance and inflate significance.
+        # For example that use weight only for calculating mean, see
+        # http://www.analyticalgroup.com/download/WEIGHTED_MEAN.pdf
+        mvn['ns'] = (dd.notnull()).sum(axis=1) # Number of Samples
+        mvn['v' ] = SSE / (mvn['ns'] - 1) / scale_var
+        mvn['En'] = mvn['ns']
+        mvn['EV'] = mvn['v']
+        
+        mvn['m' ][mvn['ns']<2] = np.nan
+        mvn['v' ][mvn['ns']<2] = np.nan
+        mvn['ns'][mvn['ns']<2] = np.nan
+        mvn['n' ][mvn['ns']<2] = np.nan
+        mvns[idx] = mvn
+    mvns['idxes'] = idxes[:len(idxes) - paired]
+    return mvns
+
+def calc_ttest_stats(mvns, paired, equalV, need_z = True):
+    idxes = mvns['idxes']
+    dxs = {}; pvals = {}; zs = {}
+    if paired:
+        for idx in idxes:
+            mvn = mvns[idx]
+            dx, v, n, En = mvn['mdx'], mvn['EV'], mvn['n'], mvn['En']
+            t = dx / (v/n)**0.5
+            p = ss.t.cdf(-abs(t), En-1) * 2
+            pvals[idx] = pd.Series(p, index=t.index)
+            if need_z:
+                zs[idx] = pd.Series(np.sign(t) * -ss.norm.ppf(pvals[idx]/2), index=t.index)
+            dxs[idx] = dx
+    else: 
+        for i in range(len(idxes[:-1])):
+            idx = idxes[i];   idx1 = idxes[i+1]
+            mvn0 = mvns[idx]; mvn1 = mvns[idx1]
+            dx = mvn1['m'] - mvn0['m']
+            v0, n0, En0 = mvn0['EV'], mvn0['n'], mvn0['En']
+            v1, n1, En1 = mvn1['EV'], mvn1['n'], mvn1['En']
+            p = ttest2(dx, v0, n0, En0, v1, n1, En1, equalV)
+            pvals[idx] = pd.Series(p, index=dx.index)
+            if need_z:
+                zs[idx] = pd.Series(np.sign(dx) * -ss.norm.ppf(pvals[idx]/2), index=dx.index)
+            dxs[idx] = dx
+    return dxs, pvals, zs
+
+def ttest(data, controls=None, paired=False, weights=None, equalV=False, 
+          do_SVA=False, nSV=1, penaltyRatioToSV=0, normalize_min_pval=0.1, 
+          get_SVA_pop=True, ridge=False, parallel=True, need_z=True):
+    idxes = data.columns.levels[0].tolist()
+    if controls is None: 
+        for _ in range(2): 
+            data, controls = normalize_by_least_change(data, equalV=equalV, 
+                                                       min_pval=normalize_min_pval, 
+                                                       weights=weights, paired=paired)
+    else:
+        mcs = data.loc[controls].mean(axis=1).dropna()
+        smc = sorted(mcs.values); l = len(smc)
+        mid_controls = mcs[(mcs >= smc[l//5]) & (mcs < smc[l//5*4])].index
+        data = cross_group_normalization(data, idxes, mid_controls)
+    vbs = {}
+    scale_var = 1
+    if do_SVA: 
+        data, SVApop, scale_var = partial_ridge_sva_residual(data, controls, nSV=nSV, penaltyRatioToSV=penaltyRatioToSV,
+                                          get_SVA_pop=get_SVA_pop, ridge=ridge, parallel=parallel)
+        vbs['SVApop'] = SVApop
+    mvns = calc_mvns(data, weights, paired, scale_var)
+    vbs['mvns'] = mvns
+    dxs, pvals, zs = calc_ttest_stats(mvns, paired, equalV, need_z=need_z)
+    if len(idxes)==2: 
+        pvals = pvals[idxes[0]]; dxs = dxs[idxes[0]]
+        if need_z: zs = zs[idxes[0]]
+    vbs['dx'] = dxs
+    return pvals, zs, vbs
+
+def ascertained_ttest(data, controls=None, paired=False, weights=None, 
+                      span=None, equalV=False, pre_neutralize=True, 
+                      do_SVA=False, nSV=1, penaltyRatioToSV=0, normalize_min_pval=0.1, 
+                      get_SVA_pop=True, ridge=False, parallel=True):
+    """
+    data is a MultiIndex DataFrame with id (eg. shRNA, gene) as row index and different 
+    experimental condition numbers (0, 1, 2, ...) and sample names in tuples as column index.
     eg.: 
-    data = {'geneA':[[0.0, 1.1, 2.2], [3.3, 4.4], [5.5, 6.6]], 
-            'geneB':[[1.2, 2.3], [3.4, 4.5], [5.6, 6.7, 8.9]]} 
-    has two genes and three experimental conditions. Each condition has two or three replicates.
-    data should have already been normalized (with normal distribution; Replicates should have the same mean or median).
+>>> data.head()
+                      0                             1            
+                     S1        S2        S3        S6        S5        S7   
+0610005C13Rik  1.058412       NaN  2.033172  1.283600  0.356335  1.330445   
+0610007N19Rik       NaN  0.054081 -1.917866  2.215734  2.147257  2.367417   
+0610007P14Rik  4.840528  4.656822  5.305128  5.117443  5.223823  4.544029   
+0610008F07Rik  1.343370  1.813711  1.385292  1.711190  2.077108  1.935664   
+0610009B14Rik  1.868023  2.189409  0.257601  0.774219  2.220796  2.242303   
+
+    `data` has two experimental conditions (0 and 1), each with three replicates. 
+    data should have already been normalized (with normal distribution; 
+    Replicates should have the same mean or median).
      
-    Only data specified by idxes (subset of [0, 1, 2] for the above data) will be analyzed. 
-    Comparison is done step-wise, i.e., idxes[i] vs. idxes[i+1] for i in range(len(idxes)-1).
-    controls: the genes (or seqids) that are supposed to have neutral effects and the mean of them will be used as controls.
+    controls: the genes (or seqids) that are supposed to have neutral effects and 
+    the mean of them will be used as controls.
     If controls is None, then the mean of all genes will be used as controls. 
     
-    If paired is True, experimental conditions must have the same number of replicates in matched order for a gene. 
+    If paired is True, experimental conditions must have the same number of 
+    replicates in matched order for a gene. 
     
     Return dicts:
     p values, z-scores
-    if debug is True, return an additional dict containing most intermediate variables.
     """
-    vbs = {}
-    pvals = {}; zs = {}; pops = {}
-    tps, _, dxs, mvns = ttest(data, idxes, controls, paired, weights, equalV, minn)
-    mns = [np.nanmean([mvns[idx][gene][2] for gene in mvns[idx]]) for idx in idxes[:len(idxes)-paired]]
+    pops = {}
+    idxes = data.columns.levels[0].tolist()
+    tps, _, vbs = ttest(data, controls=controls, paired=paired, weights=weights, equalV=equalV, 
+                        do_SVA=do_SVA, nSV=nSV, penaltyRatioToSV=penaltyRatioToSV,
+                        normalize_min_pval = normalize_min_pval, need_z=False,
+                        get_SVA_pop=get_SVA_pop, ridge=ridge, parallel=parallel)
+    mvns = vbs['mvns']
+    vbs['idxes'] = mvns['idxes']
+    mns = [mvns[idx]['n'].mean() for idx in idxes[:len(idxes)-paired]]
     if len(idxes) == 2:
         _, _, pops[0] = neup(tps, with_plot=False, minr0=0, fine_tune=False)
     else:
         for i in range(len(idxes)-1): 
             _, _, pop = neup(tps, with_plot=False, minr0=0, fine_tune=False)
             pops[i] = pop
-    if pre_neutralize: print(round(pops[0],2), end='; ')
+    if pre_neutralize: print(round(pops[0], 3), end='; ')
 #         print("Student's t-test power of p-values:", list(pops.values()))
-    for i in range(len(mvns)): 
+    base_pop = {}
+    if span is None: span = 0.95 * min(1, 1 - 0.2 * (np.log10(len(mvns[0]['n']))-2))
+    for i in range(len(mvns['idxes'])): 
         idx = idxes[i]
-        pvals[idx] = {}; zs[idx] = {}
         i0 = max(0, i-1)
         pop = pops[i0]
         if 0 < i < len(pops)-1: pop = (pop + pops[i]) / 2
+        mn = (mns[i0] + mns[i]) / 2
         if pre_neutralize == False: pop = 1
         elif len(idxes) == 2 and not paired:
-            pop = pop ** (2*mns[i]/(sum(mns)))
-        vbs[idx] = estimated_deviation(mvns[idx], min(pop, 1), span=span)
-    if paired:
-        for idx in mvns:
-            for gene in data:
-                v, n, En = vbs[idx ]['Es2s'][gene], vbs[idx]['ns'][gene], vbs[idx]['Ens'][gene]
-                dx = mvns[idx][gene][0]
-                t = dx / (v/n)**0.5
-                p = ss.t.cdf(-abs(t), En-1) * 2
-                z = z_score_for_ttest_p_val(t, p)
-                pvals[idx][gene] = p
-                zs[idx][gene] = z
-                if vbs[idx]['Vs'][gene] == 0:
-                    pvals[idx][gene] = np.nan; zs[idx][gene] = np.nan
-    else:
-        for gene in data:
-            for i in range(len(idxes[:-1])):
-                idx = idxes[i]; idx1 = idxes[i+1]
-                dx = mvns[idx1][gene][0] - mvns[idx][gene][0]
-                v0, n0, En0 = vbs[idx ]['Es2s'][gene], vbs[idx ]['ns'][gene], vbs[idx ]['Ens'][gene]
-                v1, n1, En1 = vbs[idx1]['Es2s'][gene], vbs[idx1]['ns'][gene], vbs[idx1]['Ens'][gene]
-                t, p = ttest2(dx, v0, n0, En0, v1, n1, En1, equalV)
-                z = z_score_for_ttest_p_val(t, p)
-                pvals[idx][gene] = p
-                zs[idx][gene] = z
-                if vbs[idx]['Vs'][gene] + vbs[idx1]['Vs'][gene] == 0:
-                    pvals[idx][gene] = np.nan; zs[idx][gene] = np.nan
+            pop = pop ** (mns[i]/mn)
+        pop = min(pop, 1)
+        vbs[idx] = estimated_deviation(mvns[idx], pop, span=span, parallel=parallel)
+        base_pop[idx] = (pop ** 0.5 * (mn - 1) + 1) / mn
+        if paired: vbs[idx]['mdx'] = mvns[idx]['mdx']
+    _, pvals, zs = calc_ttest_stats(vbs, paired, equalV)
+#     for idx in pvals:
+#         pvals[idx]  **= 1 / adj_pops[idx]
+#         zs[idx] = np.sign(dxs[idx]) * -ss.norm.ppf(pvals[idx]/2)
             
     if len(idxes)==2: pvals = pvals[idxes[0]]; zs = zs[idxes[0]]
-    if debug: 
-        vbs['mvns'] = mvns; vbs['dx'] = dxs
-        return pvals, zs, vbs
-    return pvals, zs
+    vbs['mvns'] = mvns; vbs['ttest_pops'] = pops; vbs['base_pop'] = base_pop
+    return pvals, zs, vbs
     
 def ttest2(dx, v1, n1, En1, v2, n2, En2, equalV=False):
-#     if n1 <= 1 or n2 <= 1: return np.NaN, np.NaN
     if equalV:
         df = En1 + En2 - 2
         sp = np.sqrt( ( (En1-1)*v1 + (En2-1)*v2 ) / df )
@@ -173,101 +382,180 @@ def ttest2(dx, v1, n1, En1, v2, n2, En2, equalV=False):
         df = ((vn1 + vn2)**2) / ((vn1**2) / (En1 - 1) + (vn2**2) / (En2 - 1))
         t = dx / np.sqrt(v1/n1 + v2/n2)
     p = ss.t.cdf(-abs(t), df) * 2
-    return t, p
+    return p
 
 def z_score_for_ttest_p_val(t, p):
-    z = -ss.norm.ppf(np.array(p)/2) * np.sign(t)
+    z = -itg.z_score(np.array(p)/2) * np.sign(t)
     return z
 
-def estimated_deviation(mvn, pop, span):
-    ns = []; Ns = {}; ms = []; Vs = []; Ens = {}; Es2s = {}; Vars = {}; vbs = {}
-    vbs['EVs'] = {}; vbs['Vmax'] = {}; vbs['means'] = {}
-    genes = sorted(mvn)
-#     print(pop**0.5)
-    for gene in genes:
-        m, v, n = mvn[gene]
-        nn = 1 + (n-1) * pop ** 0.5# max(1.05, n*pop)
-        ns.append(nn)
-        Vs.append(v * (n-1)/n * nn / (nn-1))
-        ms.append(m)
-        Ns[gene] = nn; Vars[gene] = v; vbs['means'][gene] = m
-    x = np.array(ns)/np.nanmax(ns) + np.array(ms)/np.nanmax(ms)
-    x[np.array(Vs)==0] = np.NaN
-    logVs = np.log(Vs)
-    nx = sum(abs(x)>=0)
-    if nx < 30000: ElogVs, SElogVs = loess_fit(x, logVs, w=ns, span=span, get_stderror=True) # Very slow and memory intensive.
-    else: ElogVs = loess_fit(x, logVs, w=ns, span=span); SElogVs = None
-    S2all = loess_fit(x, (logVs - ElogVs)**2, w=ns, span=span)
-#     while np.nanmin(S2all) < 0 and span > 0.4: 
-#         S2all = loess_fit(x, (logVs - ElogVs)**2, w=ns, span=span); span *= 0.9
-    S2all[S2all<0] = 0
-    meanns = loess_fit(x, ns, span=span)
-    Vsmpls = polygamma(1, (meanns-1)/2)
-    Vadj = Vsmpls * S2all / np.nanmax(S2all)
-    if SElogVs is None: 
-        xx, yy = density(x, nbins=int(50 * (nx/1000)**0.5))
-        denx = poisson_regression(x, xx, yy, 7, symmetric=False)
-        SElogVs = (S2all / (nx * span*0.5 * denx)) ** 0.5
-    VlogV0s = SElogVs**2 + np.nanmean(np.maximum(0, S2all - Vadj)) * S2all / np.nanmean(S2all)
-    def fVls2(V, s2, n, ElogV, VlogV0):
-        return (1./V)**((n+1)/2) * np.exp( - (np.log(V)-ElogV)**2 / 2 / VlogV0  -  (n-1)*s2/2/V )
-    def dVsigma(n, r):
-#         return (n+1)/2 * (2/(n-3) - np.exp(gammaln(n/2-1) - gammaln((n-1)/2))**2) - r
-        return 1 - (n-3) / 2 * np.exp(gammaln(n/2-1) - gammaln((n-1)/2))**2 - r
-    def dfVls2(V, s2, n, ElogV, VlogV0): return (n-1) * s2 / 2 / V - (np.log(V) - ElogV) / VlogV0 - (n+1)/2
-    # Oliphant, Travis E., "A Bayesian perspective on estimating mean, variance, and standard-deviation from data" (2006).All Faculty Publications. Paper 278.
-    # http://scholarsarchive.byu.edu/facpub/278
-    for i, gene in enumerate(genes):
-        ElogV = ElogVs[i]; EV0 = np.exp(ElogV)
-        if EV0 >= 0: # not NaN
-            n = ns[i]; ElogV = ElogVs[i]; s2 = max(Vs[i], EV0/100); VlogV0 = VlogV0s[i]
-            r = 0.999
-            while True:
-                try: 
-                    Vmax = fsolve(dfVls2, min(EV0, s2)*r, args = (s2, n, ElogV, VlogV0))[0]
-                    break
-                except: 
-                    r *= 0.9
-                    if r<0.5: print('x0={}; s2={}; n={}; ElogV={}; VlogV0={}'.format(min(EV0, s2), s2, n, ElogV, VlogV0)); raise
-            pts = [EV0, s2, Vmax]
-            Dmax = fVls2(Vmax, s2, n, ElogV, VlogV0)
-            upperlim = max(pts); lowerlim = min(pts)
-            while fVls2(upperlim, s2, n, ElogV, VlogV0) > 1e-20 * Dmax: upperlim *= 1.1 + 10/n
-            while fVls2(lowerlim, s2, n, ElogV, VlogV0) > 1e-20 * Dmax: lowerlim /= 1.1 + 10/n
+def cdfs2alV(s, n, V, a):
+    return gammainc((n-1)/2, (n-1)*s**(1/a)/(2*V))
+
+def means2a(n, V, a): 
+    return np.exp(gammaln((n-1)/2+a) - gammaln((n-1)/2)  + a * np.log(2*V/(n-1)))
+
+def vars2a(n, V, a, y0=0):
+    G  = gammaln((n-1)/2)
+    Gs = gammaln((n-1)/2+a)
+    return (2*V/(n-1))**(2*a) * (np.exp(gammaln((n-1)/2+2*a)-G) - np.exp(2*(Gs-G))) - y0
+
+# Oliphant, Travis E., "A Bayesian perspective on estimating mean, variance, and standard-deviation from data" (2006).All Faculty Publications. Paper 278.
+# https://scholarsarchive.byu.edu/cgi/viewcontent.cgi?article=1277&context=facpub
+def dVsigma(n, r):
+    return 1 - (n-3) / 2 * np.exp(gammaln(n/2-1) - gammaln((n-1)/2))**2 - r
+
+def dfVls2 (V, s2, n, ElogV, VlogV0): 
+    return (n-1) * s2 / 2 / V  -  (np.log(V) - ElogV) / VlogV0   -  (n+1)/2
+
+def dfVls2a(V, s2, n, EVa, Vga, a, n0):  # @UnusedVariable
+    return (n-1) * s2 / 2 / V  -  (V**a - EVa) * a * V**a / Vga  -  (n/2+1-a)
+
+uselogV = False
+fVls2 = itg.fVls2a; EVfV = itg.EVfVa
+EsgmfV = itg.EsgmfVa; VsgmfV = itg.VsgmfVa
+if uselogV:
+    fVls2 = itg.fVls2; EVfV = itg.EVfV
+    EsgmfV = itg.EsgmfV; VsgmfV = itg.VsgmfV
+
+def calc_En_Es2(params):
+    gene, n, V, EV0, VlogV0, a = params
+    useNormal = False
+    if uselogV: 
+        s2 = max(V, EV0/100)
+        args = [s2, n, np.log(EV0), VlogV0]
+    else: 
+        s2 = max(V, EV0/100)
+        args = [s2, n, EV0**a, VlogV0, a, 0] # set n0 = 0
+    En = n; EV = EV0
+    if EV0 >= 0 and s2 >=0: # not NaN
+        x0 = max(EV0, s2)
+        while True:
             try: 
-                M   =  quad(lambda V:                      fVls2(V, s2, n, ElogV, VlogV0)/Dmax, lowerlim, upperlim, points=pts)[0] * Dmax
-            except: print('EV0={}; s2={}; n={}; ElogV={}; VlogV0={}; M={}; upperlim={}; lowerlim={}; pts={}'.format(
-                                EV0, s2, n, ElogV, VlogV0, M, upperlim, lowerlim, pts)); raise
-            if n < 100 or M > 0:
-                EV   = quad(lambda V:  V                 * fVls2(V, s2, n, ElogV, VlogV0)/M, lowerlim, upperlim, points=pts)[0]
-                Esgm = quad(lambda V:  V**0.5            * fVls2(V, s2, n, ElogV, VlogV0)/M, lowerlim, upperlim, points=pts)[0]
-                Vsgm = quad(lambda V: (V**0.5 - Esgm)**2 * fVls2(V, s2, n, ElogV, VlogV0)/M, lowerlim, upperlim, points=pts)[0]
-                if Vsgm / EV < 1e-3: En = np.e + 0.5 * EV / Vsgm
+                if   uselogV  : Vmax = fsolve(dfVls2,  x0, args=(*args,))[0]
+                elif useNormal: Vmax = fsolve(dfVls2a, x0, args=(*args,))[0]
                 else:
-                    try:  En = fsolve(dVsigma, 3.01, args=(Vsgm/EV,))[0]
-                    except: 
-                        try: En = fsolve(dVsigma, 6, args=(Vsgm/EV,))[0]
-                        except: 
-                            print(gene, 'En Error: Vsgm={}; EV={}; EV0={}; s2={}; n={}; ElogV={}; VlogV0={}; M={}; Vmax={}; Dmax={}'.format(
-                                        Vsgm, EV, EV0, s2, n, ElogV, VlogV0, M, Vmax, Dmax))
-                            Ens[gene] = np.nan; Es2s[gene] = np.nan; EV = np.nan; Vmax = np.nan
+                    rV = VlogV0 / EV0**(2*a)
+                    n0 = 2*a**2/rV + 1
+                    if rV >= 1e-3:
+                        try: n0 = fsolve(vars2a, n0, args=(EV0, a, VlogV0))[0]
+                        except:
+                            try: n0 = fsolve(vars2a, 1+1e-11, args=(EV0, a, VlogV0))[0]
+                            except: print('Cannot solve for n0. Use approximation', n0)
+                    En = n0 + n - 1
+                    EV = ((n0-1) * EV0 + (n-1) * s2) / (n0 + n - 2)
+#                     return En, EV
+                    Vmax = ((n0-n-2) + np.sqrt((n0-n-2)**2 + 4*(n0-1)/EV0*(n-1)*s2)) / (2 * (n0-1) / EV0)
+                    args = [s2, n, EV0**a, EV0, a, n0]
+                break
+            except: 
+                x0 *= 0.9
+                if x0 < 0.5 * min(EV0, s2): 
+                    print('x0={}; s2={}; n={}; ElogV={}; VlogV0={}'.format(
+                        min(EV0, s2), s2, n, EV0, VlogV0)); raise
+        pts = [EV0, s2, Vmax]
+        args.append(Vmax)
+        uplmt0 = upperlim = max(pts); lowerlim = min(pts)
+        while fVls2(upperlim, *args) > 1e-20 and upperlim < 1000 * uplmt0: upperlim *= 1.1 + 10/n
+        while fVls2(lowerlim, *args) > 1e-20: lowerlim /= 1.1 + 10/n
+        try: 
+            M   =  quad(fVls2, lowerlim, upperlim, args=(*args,), points=pts)[0]
+        except: 
+            print('EV0={}; s2={}; n={}; VlogV0={}; M={}; upperlim={}; lowerlim={}; pts={}'.format(
+                    EV0, s2, n, VlogV0, M, upperlim, lowerlim, pts))
+            raise
+        if n < 100 or M > 0:
+            EV   = quad(  EVfV, lowerlim, upperlim, args=(*args, M),       points=pts)[0]
+            Esgm = quad(EsgmfV, lowerlim, upperlim, args=(*args, M),       points=pts)[0]
+            Vsgm = quad(VsgmfV, lowerlim, upperlim, args=(*args, M, Esgm), points=pts)[0]
+            if Vsgm / EV < 1e-3: En = np.e + 0.5 * EV / Vsgm
             else:
-                En = n; EV = EV0
-            Ens[gene] = En
-            Es2s[gene] = EV #* (En-3) / (En-1)
-        else: Ens[gene] = np.nan; Es2s[gene] = np.nan; EV = np.nan; Vmax = np.nan
-        vbs['EVs'][gene] = EV; vbs['Vmax'][gene] = Vmax
-    vbs['Es2s'] = Es2s; vbs['Ens'] = Ens; vbs['ns'] = vbs['n'] = Ns; vbs['Vs'] = Vars; vbs['mean'] = ms
-    vbs['S2all'] = S2all; vbs['Vsmpls'] = Vsmpls; vbs['ElogVs'] = ElogVs; 
-    vbs['VlogV0s'] = VlogV0s; vbs['Vadj'] = Vadj; vbs['x'] = x
+                try:  En = fsolve(dVsigma, 3.01, args=(Vsgm/EV,))[0]
+                except: 
+                    try: En = fsolve(dVsigma, 6, args=(Vsgm/EV,))[0]
+                    except: 
+                        print(gene, 'En Error: Vsgm={}; EV={}; EV0={}; s2={}; n={}; VlogV0={}; M={}; Vmax={}'.format(
+                                    Vsgm, EV, EV0, s2, n, VlogV0, M, Vmax), params)
+    return En, EV
+
+def estimated_deviation(mvn, pop, span, parallel=True):
+    Ens = {}; EVs = {}; vbs = {}
+    genes = list(mvn['m'].index)
+    
+    n = mvn['ns']; v = mvn['v']; ms = np.array(mvn['m'])
+    nn = 1 + (n - 1) * pop ** 0.5
+    Vs = v * (n - 1) / n * nn / (nn-1)
+    Ns = 1 + (mvn['n'] - 1) * pop ** 0.5
+    Vars = Vs
+    vbs['means'] = mvn['m']
+    nn = np.array(nn); ns = np.array(mvn['ns'])
+    Vs = np.array(Vs)
+    x = np.array(nn)/np.nanmax(nn) + np.array(ms)/(np.nanmax(ms) - np.nanmin(ms))
+    x[np.logical_or(Vs==0, np.isnan(Vs))] = np.NaN
+    
+    if uselogV: logVs = np.log(Vs); a = np.NaN
+    else:
+        a = segmented_mean_median_norm(x, Vs) 
+        logVs = Vs ** a # logVs is actually Vs^a
+    
+    ElogVs  = loess_fit(x, logVs, span=span)
+    for i in range(10):
+        try:
+            ElogVs2 = loess_fit(x, logVs, span=span*0.2*(i/2.+1))
+            break
+        except: pass
+    ELoess  = loess_fit(x, (ElogVs - ElogVs2)**2, span=span)
+    S2all   = loess_fit(x, (logVs  - ElogVs )**2, span=span)
+    minS2all = np.nanmean(S2all) * 1e-3
+    S2all[S2all<0] = 0
+    S2all += minS2all
+    meanns = loess_fit(x, ns, span=span) # Used to calculate V of sampling V (Vsmpl)
+    # Variance of sampling variance should be the sun of sampling expression variance (VE) and 
+    # sampling technical replicate variance (VT). Technical replicates would stabilize VT and thus
+    # reduce Vsmpl. That is why we should not use nn to calculate Vsmpl. On the other hand,
+    # technical replicates does not influence VE. But VE is difficult to estimate and could be small.
+
+    """Variance normalization and correction. 
+    Note: ONLY mean of s2 is an unbiased estimation of true variance; transformed s2 is not.
+    https://en.wikipedia.org/wiki/Unbiased_estimation_of_standard_deviation
+    """
+    if uselogV: 
+        EV0s = np.exp(ElogVs) / (means2a(meanns, 1, 1e-5)) ** (1/1e-5) # bias of log(s2) can be approximated by s2 with a small power
+        Vsmpls = polygamma(1, (meanns-1)/2)
+    else:
+        EV0s = (ElogVs / means2a(meanns, 1, a)) ** (1/a) # Correct bias due to transformation
+        Vsmpls = vars2a(meanns, EV0s, a)
+    meanS2all = np.nanmean(S2all)
+    rS2 = S2all / ElogVs**2; sortedrS2 = sorted(rS2[rS2>0])
+    Vadj = Vsmpls * np.minimum(1, rS2 / mean(sortedrS2[len(sortedrS2)//10*9:]))
+    meandif = np.nanmean(np.maximum(0, S2all - Vadj))
+    VlogV0s = np.maximum(0, ELoess) + minS2all + meandif * S2all / meanS2all 
+    if parallel:
+        pool = Pool(psutil.cpu_count(logical=False))
+        results = pool.map(calc_En_Es2, zip(genes, nn, Vs, EV0s, VlogV0s, [a]*len(nn)))
+        pool.close()
+    else:
+        results = [calc_En_Es2(xi) for xi in zip(genes, nn, Vs, EV0s, VlogV0s, [a]*len(nn))]
+    for i, (En, EV) in enumerate(results):
+        gene = genes[i]
+        Ens[gene] = En
+        EVs[gene] = EV
+    vbs['EV'] = EVs; vbs['En'] = Ens; vbs['n'] = Ns; vbs['m'] = mvn['m']
+    
+    vbs['S2all'] = S2all; vbs['Vs'] = Vars; vbs['mean'] = ms
+    vbs['Vsmpls'] = Vsmpls; vbs['Vadj'] = Vadj; vbs['ElogVs'] = ElogVs
+    vbs['EV0s'] = EV0s
+    vbs['VlogV0s'] = VlogV0s; vbs['x'] = x; vbs['logVs'] = logVs
+    for k in vbs: 
+        if type(vbs[k]) is dict: vbs[k] = pd.Series(vbs[k])
+    if not uselogV: vbs['a'] = a
     return vbs
 
-def mean_median_norm(v, a0=0.1, only_positive=False):
+def mean_median_norm(v, a0=0.3, only_positive=False):
     ''' 
-    Normalize data by taking power a so that the difference between mean and median (divided by range) is minimized.
-    a0 is the initial guess of a. 
-    If only_positive is True, then only positive (and non-zero) values are used for the normalization. 
-    But all values are returned.
+    Normalize data by taking power a so that the difference between mean and median 
+    (divided by std) is minimized. a0 is the initial guess of a. 
+    If only_positive is True, then only positive (and non-zero) values are used 
+    for the normalization. But all values are returned.
     
     Returns:
     tuple: Initial values raised by the optimal power a, and a itself.
@@ -280,6 +568,18 @@ def mean_median_norm(v, a0=0.1, only_positive=False):
     md = np.nanmedian(v)
     def loss(a): 
         va = v ** a
-        return abs(np.nanmean(va) - md**a) / (np.nanmax(va) - np.nanmin(va) + 1e-19)
-    a = minimize(loss, a0, bounds=[(0.01, 10)]).x[0]
+        return abs(np.nanmean(va) - md**a) / (np.nanstd(va) + 1e-19)
+    a = minimize(loss, a0, bounds=[(0.001, 10)]).x[0]
     return v0**a, float(a)
+
+def segmented_mean_median_norm(x, Vs):
+    xs = np.array(x); xs.sort()
+    es = []; l = len(x)
+    steps = min(max(3, l//1000), 50)
+    for i in range(steps):
+        vi = Vs[(x>=xs[i*l//steps]) & (x<=xs[(i+1)*l//steps-1])]
+        if len(vi)>1:
+            _, e = mean_median_norm(vi, only_positive=True)
+            es.append(e)
+    a = np.median(es)
+    return a
