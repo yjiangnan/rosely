@@ -10,7 +10,7 @@ setup(
     description='Robust and sensitive tools for high-throughput data analysis',
     version='1.3.0',
     packages=['rosely',],
-    package_dir={'rosely': '.'},
+    package_dir={'rosely': 'rosely'},
     package_data={'rosely':['HelveticaCY.dfont']},
     license='Creative Commons',
     long_description=open('README.md').read(),
