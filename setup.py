@@ -1,8 +1,8 @@
 from distutils.core import setup, Extension
 import os
 
-integral_ext = Extension('rosely._integral', 
-			sources = ['src/integral_wrap.cxx', 'src/integral.cpp'],
+integral_ext = Extension('rosely/rosely._integral', 
+			sources = ['rosely/src/integral_wrap.cxx', 'rosely/src/integral.cpp'],
 )
 
 setup(
