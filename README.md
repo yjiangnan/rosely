@@ -1,7 +1,15 @@
 # Rosely
 ### Robust and sensitive tools for high-throughput data analysis
 
-`rosely` mainly implements the following tools:
+The combination of high-throughput data and modern statistical tools has enabled sensitive discoveries of important genes/pathways involved in biological processes. However, important questions remained unanswered. How reliable are these discoveries? When a statistical tool give you numbers of false discovery rates (FDRs), how can you trust these numbers? Are there biases and inflated false significance in the results? The reproducibility crisis hotly discussed in recent years in biological research indicates that these questions are indeed realistic concerns. There are no reasons why the same researchers, the same biological samples, and the same experimental procedures would not bring the same reproducibility crisis just because of some fancy high-throughput technics and statistical tools that are boosted mostly for sensitivity instead of robustness. 
+
+The situation may even be worse in high-throughput data analysis because the sophistication of the methods of both the experimental part and the statistical analysis part usually result in the complete separation/isolation of the two parts into the hands of different people, with the biologists rarely fully understand the statistical consequences of some easily ignored but critical actions and the bioinformaticians rarely fully understand what was going on in the experiments to formulate realistic proper assumptions to carry out the analysis. People rarely appreciate the pressure, frustration, and even guilt of the bioinformaticians when it becomes difficult for them to present very excitingly possitive results to the biologists, which encourages the bioinformaticians to come up with clever ways to produce at least a decent number of discoveries and explains why most statistical tools focus on sensitivity instead of robustness. On the other hand, biologists usually only choose the most beautiful results (possibly from different analyses or even different bioinformaticians sometimes) to present in their high-impact papers. The papers may look nice, but the devil would eventually come back at the researchers and eat their life because the results point to the wrong direction and get them lost in the so many genes/pathways identified. The worst part is, the results cannot be called into question because of their cost, sophistication, and their often assumed unbiasedness. 
+
+`Rosely` is developed with the emphasis of robustness in mind. It is developed for the purpose of parallel studies of many genes to give a reliable confidence level for each gene instead of just identifying some top candidates. So, there is no motivation for false significance but strong desire against it. I personally carried out most part of the years of tedious experiments (shRNA library production; lenti-virus production; stem cell isolation, culture, transduction, and transplatation; generation of libraries ready for sequencing), not just to follow standard protocols, but made substantial improvements in the experimental procedures. This allows me to deeply think and understand the many problems in biological processes/experiments and their statistical consequences. Therefore, `Rosely` does not simply give you list of *p*-values and FDRs, it is optimized for reducing the long-term cost of researchers and at the same time providing reliable sensitive discoveries. 
+
+A central component of `Rosely` is the development of neutrality-controlled *p*-values and local false discovry rate (LFDRs). Neutrality-controlled *p*-values
+
+`Rosely` mainly implements the following tools:
 ### 1. Classes for reading and normalizing data and for results
 `ReadCounts` is a class for reading excel and text files containing read counts for each gene/constructs in each sample. It implements data normalization (to bring different samples to the same level) by either a specific control gene/construct, or the median of all data, or a quantile (1-9) of all data around the median, or a list of control genes/constructs.
 
@@ -25,6 +33,7 @@ When many replicates are available and each construct does not exist in all repl
 
 ### 6. KEGG pathway enrichment analysis
 Module `pathwayanalysis` includes tools for Gene Ontology (GO) and KEGG pathway enrichment analysis, gene id mapping, and for drawing the enriched pathways with nodes color-coded by provided values such as z-scores and fold changes. 
+
 
 ## Installation
 ### Option 1
@@ -71,7 +80,7 @@ Additionally, `rosely` depends on some python packages.
 
 If you have pip3 installed (for python3), install them by pip3 can be done as:
 
-    sudo pip3 install scipy pandas matplotlib sklearn mygene biopython Pillow psutil
+    sudo pip3 install scipy pandas matplotlib sklearn psutil mygene biopython Pillow
     
 
 ### Install without root privileges
