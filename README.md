@@ -71,7 +71,7 @@ Additionally, `rosely` depends on some python packages.
 
 If you have pip3 installed (for python3), install them by pip3 can be done as:
 
-    sudo pip3 install scipy pandas matplotlib sklearn mygene biopython Pillow
+    sudo pip3 install scipy pandas matplotlib sklearn mygene biopython Pillow psutil
     
 
 ### Install without root privileges
