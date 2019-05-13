@@ -1,5 +1,15 @@
 # Rosely
 ### Robust and sensitive tools for high-throughput data analysis
+Rosely implements tools for data normalization, identification of significantly changed genes/transcripts/constructs in microarray, RNA-seq, or shRNA/CRISPR library data, and downstream Gene Ontology and KEGG pathway enrichment analysis. It puts central emphasis on robustness and gives you *p*-values that are tested and can be supported by the data. However, this does not come with the cost of reduced sensitivity. 
+
+For usage examples, see [Rosely examples](https://github.com/yjiangnan/rosely/tree/master/examples).
+
+# Table of Contents
+1. [Background](#Background)
+2. [Practical Guide](#Practical)
+3. [Installation](#Installation)
+
+## Background<a name="Background"></a>
 
 The combination of high-throughput data and modern statistical tools has enabled sensitive discoveries of important genes/pathways involved in biological processes. However, important questions remained unanswered. How reliable are these discoveries? When a statistical tool give you numbers of false discovery rates (FDRs), how can you trust these numbers? Are there biases and inflated false significance in the results? The reproducibility crisis hotly discussed in recent years in biological research indicates that these questions are indeed realistic concerns. There are no reasons why the same researchers, the same biological samples, and the same experimental procedures would not bring the same reproducibility crisis just because of some fancy high-throughput technics and statistical tools that are boosted mostly for sensitivity instead of robustness. 
 
@@ -13,6 +23,7 @@ Ascertained *t*-test is develop to achieve conservative but sensitive discoverie
 
 `Rosely` also makes serious efforts for data normalization. It implements partial-ridge-regression-regularized surrogate variable analysis (SVA) to conservatively remove the effects of hidden variables. It separates within-group sample normalization for variance reduction and cross-group normalization to guarantee that a set of control genes do not change over conditions (which could easily arise as an artifact when the data distribution across experimental groups change). 
 
+## Practical Guide<a name="Practical"></a>
 For usage examples, see [Rosely examples](https://github.com/yjiangnan/rosely/tree/master/examples).
 
 `Rosely` also implements the following tools:
@@ -41,7 +52,7 @@ When many replicates are available and each construct does not exist in all repl
 Module `pathwayanalysis` includes tools for Gene Ontology (GO) and KEGG pathway enrichment analysis, gene id mapping, and for drawing the enriched pathways with nodes color-coded by provided values such as z-scores and fold changes. 
 
 
-## Installation
+## Installation<a name="Installation"></a>
 ### Option 1
 Download and install as a normal python package:
 
