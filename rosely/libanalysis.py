@@ -75,7 +75,7 @@ gene1.2,15,25,5,30
     def read_csv(self, sep='\t', igroup=1, has_groups=True, group_sample_sep='.', sample_name_transform=None, 
                  is_microarray=False, **kwargs):
         if '.xls' in self.filename[-5:]: 
-            csv = pd.read_excel(self.filename)
+            csv = pd.read_excel(self.filename, **kwargs)
         else: csv = pd.read_csv(self.filename, sep=sep, **kwargs)
         if is_microarray:
             cleaned = pd.DataFrame()
@@ -228,25 +228,35 @@ gene1.2,15,25,5,30
                     transform=transform, by_residual=by_residual, with_plot=with_plot, **kwargs)
                         
 def correlation_heatmap(data, groups='all', samples='all', vmin=0.8, transform='log', 
-                    by_residual=False, with_plot=True, **kwargs):
-    if groups == 'all': groups = sorted(data)
-    if samples == 'all': group_samples = [(g, s) for g in groups for s in data[g]]
-    elif len(groups) == 1: group_samples = list(zip(groups * len(samples), samples))
-    else: group_samples = list(zip(*[[groups[i]] * len(samples[i]) for i in range(len(groups))],
-                              [s for spl in samples for s in spl]))
-    data = pd.DataFrame({(g,s):data[g][s] for (g, s) in group_samples})
+                    by_residual=False, with_plot=True, paired=False, **kwargs):
+    try: 
+        if groups == 'all': 
+            groups = sorted(data.keys().levels[0])
+        if samples == 'all': group_samples = [(g, s) for g in groups for s in data[g]]
+        elif len(groups) == 1: group_samples = list(zip(groups * len(samples), samples))
+        else: group_samples = list(zip(*[[groups[i]] * len(samples[i]) for i in range(len(groups))],
+                                  [s for spl in samples for s in spl]))
+    except: group_samples = sorted(data.keys())
+    data = pd.DataFrame({gs:data[gs] for gs in group_samples})
     if transform == 'log': 
         data = np.log(data)
         data[data==-np.Inf] = np.nan
         data = data.dropna()
+    if paired:
+        data = data[groups[1]] - data[groups[0]]
+        group_samples = sorted(data.keys())
     if by_residual:
         data = pd.DataFrame(data.values - data.mean(axis=1).values[:, None], 
                             index=data.index, columns=data.columns)
         vmin = -1
         kwargs['cmap'] ="coolwarm"
         kwargs['center'] = 0
-    M = pd.DataFrame(columns=pd.MultiIndex.from_tuples(group_samples), 
-                     index=pd.MultiIndex.from_tuples(group_samples))
+    if type(group_samples[0]) is tuple:
+        M = pd.DataFrame(columns=pd.MultiIndex.from_tuples(group_samples), 
+                         index=pd.MultiIndex.from_tuples(group_samples))
+    else:
+        M = pd.DataFrame(columns = group_samples, 
+                         index   = group_samples)
     for i, si in enumerate(group_samples):
         M[si][si] = 1
         for sj in group_samples[i+1:]:
@@ -260,14 +270,14 @@ def correlation_heatmap(data, groups='all', samples='all', vmin=0.8, transform='
     
         
 class Result:
-    def __init__(self, ps, zs, LFDRthr0, data_name='data', nbins=50, df_fit=5, minr0=0, 
-                 base_pop=1, fine_tune=True, neutralize=True, **kwargs):
+    def __init__(self, ps, zs, LFDRthr0, data_name='data', nbins=50, df_fit=5, minr0=0, with_plot=True,
+                 base_pop=1, fine_tune=True, neutralize=True, global_changes=False, **kwargs):
         self.ps = pd.Series(ps); self.zs = pd.Series(zs)
         self.base_pop = base_pop
         self.results = OrderedDict()
         if neutralize:
-            self.neutralize_p_values(LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, 
-                                     minr0=minr0, fine_tune=fine_tune, **kwargs)
+            self.neutralize_p_values(LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, with_plot=with_plot,
+                                     minr0=minr0, fine_tune=fine_tune, global_changes=global_changes, **kwargs)
         else: 
             self.results['LFDR'] = locfdr(zs=zs, p0s=[0])
             self.results['z-score'] = self.zs
@@ -276,16 +286,17 @@ class Result:
             
         
     def neutralize_p_values(self, LFDRthr0=0.5, data_name='data', nbins=50, df_fit=5, minr0=0, 
-                            fine_tune=True, with_plot=True, poisreg_method='SLSQP', **kwargs):
+                            fine_tune=True, with_plot=True, global_changes=False,
+                            poisreg_method='SLSQP', **kwargs):
         self.nps, self.LFDR, self.pop = neup(self.ps, LFDRthr0=LFDRthr0, data_name=data_name,
                     nbins=nbins, df_fit=df_fit, minr0=minr0, base_pop=self.base_pop,
-                    fine_tune=fine_tune, with_plot=with_plot, poisreg_method=poisreg_method, **kwargs)
+                    fine_tune=fine_tune, with_plot=with_plot, global_changes=global_changes,
+                    poisreg_method=poisreg_method, **kwargs)
         self.nzs = np.sign(self.zs) * abs(ss.norm.ppf(self.nps/2))
         self.results['LFDR'] = self.LFDR
         self.results['Controlled z-score'] = pd.Series(self.nzs)
         self.results['Controlled p-value'] = self.nps
         self.results = pd.DataFrame(self.results).sort_values(by='Controlled p-value')
-        if with_plot: print('shape of results:', self.results.shape)
         
     def update_gene_ids(self, species='mouse'):
         ids = getGeneId(self.results.index, species=species)
@@ -471,9 +482,9 @@ def prepare_ttest_data(normdata_list, transform, minmean, minn, sample_weights, 
                 weights[(i, sample)] = sample_weights[i][sample]
             ttestdata[(i, sample)] = normdata[sample]
     ttestdata = pd.DataFrame(ttestdata)
-    good = ttestdata.sum(axis=1) > minn
+    good = ttestdata.notnull().sum(axis=1) >= minn
     for i in ttestdata.keys().levels[0]:
-        good = (good & ttestdata[i].sum(axis=1) > 0) # Remove rows if all data in a group is NaN
+        good = (good & (ttestdata[i].notnull().sum(axis=1) >= minn)) # Remove rows if numbers of NaN samples in a group is < minn
     ttestdata = ttestdata[good]
     if paired:
         valid_keys = [k for k in ttestdata.keys() 
@@ -500,10 +511,11 @@ def prepare_ttest_data(normdata_list, transform, minmean, minn, sample_weights, 
     return pd.DataFrame(ttestdata), weights, a
 
 def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, sample_weights=None, weighted=True, minn=1.25,
-                           paired=False, drop_missmatch=True, equalV=False,  debug=False, method='ascertained_ttest', pre_neutralize=True, 
-                           span=None, LFDRthr0=0.5, minr0=0, fine_tune=True, neutralize=True,
-                           data_name='data', nbins=50, df_fit=5, do_SVA=False, nSV=1, penaltyRatioToSV=0, 
-                           get_SVA_pop=True, ridge=False, normalize_min_pval=0.1, parallel=True, **kwargs):
+                           paired=False, drop_missmatch=True, equalV=False,  debug=False, method='ascertained_ttest', 
+                           pre_neutralize=True, with_plot=True, 
+                           span=None, LFDRthr0=0.5, minr0=0, fine_tune=True, neutralize=True, global_changes=False,
+                           data_name='data', nbins=50, df_fit=5, do_SVA=False, nSV=2, penaltyRatioToSV=0.2, 
+                           ridge=True, normalize_min_pval=0.1, parallel=True, **kwargs):
     """Analyze the counts by ascertained_ttest
     
     Args:
@@ -528,14 +540,14 @@ def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, s
     if np.isnan(minmean) and transform == 'log1': minmean = 10
     ttestdata, weights, a = prepare_ttest_data(normdata_list, transform, minmean, 
                                                minn, sample_weights, paired=paired, drop_missmatch=drop_missmatch)
-    if ('with_plot' not in kwargs or kwargs['with_plot']==True) and a: print('Data MMM normalization power:', a)
+    if with_plot==True and a: print('Data MMM normalization power:', a)
     test = ttest
     if not weighted: weights = False
     testkwargs = {
         'controls':controls, 'paired': paired, 'weights': weights, 'equalV': equalV,
         'do_SVA': do_SVA, 'nSV': nSV, 'penaltyRatioToSV': penaltyRatioToSV,
         'normalize_min_pval': normalize_min_pval,
-        'get_SVA_pop': get_SVA_pop, 'ridge': ridge, 'parallel': parallel
+        'ridge': ridge, 'parallel': parallel
         }
     if method=='ascertained_ttest':
         test = ascertained_ttest
@@ -545,12 +557,13 @@ def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, s
     base_pop = 1
     if 'base_pop' in vbs: base_pop = vbs['base_pop'][0]
     res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, 
-                 fine_tune=fine_tune, neutralize=neutralize, base_pop=base_pop, **kwargs)
+                 fine_tune=fine_tune, global_changes=global_changes, neutralize=neutralize, base_pop=base_pop, **kwargs)
     if debug: res.vbs = vbs
     nm = 'dx'
     if 'ttest_pops' in vbs: res.ttest_pops = vbs['ttest_pops']
     if type(transform) is str and 'log' in transform: nm = 'log2 fold change'
     res.results[nm] = pd.Series(dxs)
+    if with_plot: print('shape (dimensions) of results:', res.results.shape)
     return res
 
 def combine_by_gene(zs, sep='.', LFDR0=0.3, p0s=[0, ], nbins=50, df_fit=5, power_of_pval=1, 

@@ -229,8 +229,8 @@ def lsq_fit_pvalues(r, p0, pvals):
     return fp(pvals, a, para), a, para
     
 
-def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.0, maxr0=1, nbins=50, df_fit=5, data_name='data', 
-         with_plot=True, fine_tune=True, new_figure=True, plotLFDR=True, ax0=121, axes=[],
+def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.0, nbins=50, df_fit=5, data_name='data', 
+         with_plot=True, fine_tune=True, new_figure=True, plotLFDR=True, ax0=121, axes=[], global_changes=False,
          poisreg_method='SLSQP', base_pop=1, subplot_label=''):
     """ Calculate the neutrality-controlled p values.
     getLFDR: whether or not to calculate local false discovery rate (LFDR).
@@ -255,7 +255,7 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.0, maxr0=1, nbins=50, df_
         LFDRthr = LFDRthr0 * mean(lfdr) * aa**((1. - aa)*0.5)
         if lfdr.min() < LFDRthr: r0 = min(r0, min(0.9, rp[(lfdr<LFDRthr)][-1]))
         else: r0 = 0.
-        if r00 and minr0: r0 = (r0*r00**9) ** 0.1
+        if r00 and global_changes: r0 = (r0*r00**9) ** 0.1
         r00 = r0
         r0 = max(minr0, r0)
         pe = LFDRthr0/2
@@ -274,17 +274,16 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.0, maxr0=1, nbins=50, df_
         
         if (a-1)*(a-a0) <= 0: break
         aa = a
-#         ps = ps0**(aa)
         if abs(a-1) < 1e-9: break
         a0 = a
-        if minr0: 
+        if global_changes: 
             yhat = fp(x, a, para)
             SE = ( sum((yhat - y)**2 * y*y)/sum(y*y) )**0.5 / len(x) * aa
         else: SE = 0
         if with_plot: 
-            print('iterations:{} r0:{:.3f}, re:{:.3f}, aa:{:.5f} a:{:.5f} para:{} SE:{:.7f}'.format(
-                i, r0, re, aa, a, para[1:], SE))
-        if (SE > SE0 and minr0 and r0 < maxr0) or r0==0: break
+            print('iterations:{} r0:{:.3f}, re:{:.3f}, a:{:.5f} lsq para:{}'.format(
+                i, r0, re, a, float32(para[1:])) + ' SE:{:.7f}'.format(SE)*global_changes)
+        if (SE > SE0 and global_changes) or r0==0: break
         SE0 = SE
     if aa > 1: aa **= 0.5
     fine_tuned = False
@@ -294,7 +293,7 @@ def neup(pvals0, getLFDR=True, LFDRthr0 = 0.5, minr0=0.0, maxr0=1, nbins=50, df_
             x = ps0[int(len(ps) * re):]
             psneu, para = fit_pvalues(x, y, pvals, aa)
             fine_tuned = True
-            if with_plot: print('para, raw aa:', para, aa)
+            if with_plot: print('finetune para:', para, ' raw aa:', aa)
             aa = para[0]
         LFDR = locfdr(psneu, p0s=[0.], with_plot=with_plot and plotLFDR, 
                       new_figure=new_figure, plot_density_only=True, ax0=ax0, axes=axes,

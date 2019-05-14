@@ -2,7 +2,7 @@ import pandas as pd
 from scipy.special import betainc, gammaln
 from collections import OrderedDict
 # from scipy.optimize import fsolve
-import requests, os, re, time
+import requests, os, re, time, pathlib
 import numpy as np
 import xml.etree.cElementTree as et
 from .neutralstats import locfdr
@@ -194,10 +194,10 @@ def draw_kegg_pathways(pathways, DEG_results, colorcolumn='Controlled z-score', 
     DEG_results: a pandas DataFrame indexed by entrezgene and has a column `symbol` and a column for color values specified by `colorcolumn`.
     overlap_cutoff: a cutoff value for displaying the gene symbols of genes co-localized in the same box of KEGG pathways.
     """
-    if folder is not None and not os.path.isdir(folder): os.mkdir(folder)
+    if folder is not None and not os.path.isdir(folder): pathlib.Path(folder).mkdir(parents=True)
     for (i, path) in enumerate(pathways.index):
         drawPathway(DEG_results, path, colorcolumn, cutoff=overlap_cutoff,
-                    filename = os.path.join(folder, ("%02d. " % (i+1)) + pathways['Pathways'][path] + '_' + path.split(':')[-1]))
+                    filename = os.path.join(folder, ("%02d. " % (i+1)) + pathways['Pathways'][path].replace('/','-') + '_' + path.split(':')[-1]))
 
 BLUE = np.array([0, 0, 255]); RED = np.array([255, 0, 0]); WHITE = np.array([255, 255, 255])
 def value2color(v, vmax, pwr):
@@ -297,7 +297,12 @@ def drawPathway(data, pathwayId, colorcolumn = 'color value', cutoff=0, power = 
     for gene in changed:
         x = gene['x']; w = gene['w']; y = gene['y']; h = gene['h']; nr = len(gene['name'])
         for i in range(nr):
-            try: draw.text((x-w/2+5+(7-len(gene['name'][i]))*3, y-h*(nr/2-i)*0.7), gene['name'][i], (0,60,0), font=font)
-            except: print(gene['name'][i], 'is not str and cannot be used as gene name.')
+            try: 
+                name = gene['name'][i]
+                if not (type(name) is str): 
+                    print(name, 'is converted to', name.values[0])
+                    name = name.values[0]
+                draw.text((x-w/2+5+(7-len(name))*3, y-h*(nr/2-i)*0.7), name, (0,60,0), font=font)
+            except: print(name, 'is not str and cannot be used as gene name.')
     if filename is None: im2.show()
     else: im2.save(filename + ".png")
