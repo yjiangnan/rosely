@@ -25,7 +25,7 @@ from . import integral as itg
 
 __all__ = ['ascertained_ttest', 'mean_median_norm', 'segmented_mean_median_norm', 'ttest', 'ttest2', 'itg']
 
-def partial_ridge_sva_residual(data, controls, nSV, penaltyRatioToSV=0., get_SVA_pop=True, ridge=False, parallel=True):
+def partial_ridge_sva_residual(data, controls, nSV, penaltyRatioToSV=0., ridge=True, parallel=True):
     """
     Surrogate variable analysis:
     An improved and explicit surrogate variable analysis procedure by coefficient adjustment
@@ -82,8 +82,7 @@ def partial_ridge_sva_residual(data, controls, nSV, penaltyRatioToSV=0., get_SVA
     XS1XS1 = XS1.T @ XS1
     
     ptrg = partial(partial_ridge, X=X, S=S, XS0=XS0, XSXS0=XSXS0, XS1=XS1, XS1XS1=XS1XS1, I0=I0, 
-                        ridge=ridge, nSV=nSV, nparam=nparam, penaltyRatioToSV=penaltyRatioToSV, 
-                        get_SVA_pop=get_SVA_pop)
+                        ridge=ridge, nSV=nSV, nparam=nparam, penaltyRatioToSV=penaltyRatioToSV)
     if parallel:
         pool = Pool(psutil.cpu_count(logical=False))
         results = pool.map(ptrg, zip(ys, values, dfes))
@@ -92,19 +91,16 @@ def partial_ridge_sva_residual(data, controls, nSV, penaltyRatioToSV=0., get_SVA
     for (beta, se) in results:
         B.append(beta); ses.append(se)
     B = np.transpose(B)
-    pop = None
-    if get_SVA_pop:
-        pvals = 2*(ss.t.cdf(-np.abs(B[0]/ses), dfes))
-#         pF = ss.f.cdf(1/np.array(Fs), dfes, nparam-1)
-        _, _, pop = neup(pvals, with_plot=False, minr0=0, fine_tune=False, data_name='SVA ridge')
-        print('SVA pop of design variable'+' for ridge regression'*ridge+':', pop)
+    pvals = 2*(ss.t.cdf(-np.abs(B[0]/ses), dfes))
+    _, _, pop = neup(pvals, with_plot=False, minr0=0, fine_tune=False)
+    print('SVA pop of design variable'+' for ridge regression'*ridge+':', pop)
     sum_inv_counts = sum([1. / X0[:,0].tolist().count(x) for x in set(X0[:,0])])
     scale_var = (data.T - XS1 @ B).var(axis=0, ddof=2) * sum_inv_counts / (np.array(ses)**2)
     res = data.T - S @ B[X.shape[1]:, :]
     return res.T, pop, scale_var
 
 def partial_ridge(params, X, S, XS0, XSXS0, XS1, XS1XS1, I0, ridge, nSV, nparam, 
-                  penaltyRatioToSV, get_SVA_pop):
+                  penaltyRatioToSV):
     y, y0, dfe = params
     valid = np.logical_not(np.isnan(y))
     inv = np.linalg.inv
@@ -129,29 +125,25 @@ def partial_ridge(params, X, S, XS0, XSXS0, XS1, XS1XS1, I0, ridge, nSV, nparam,
         else:
             lmda = np.nan
     else: lmda = 0
-    L = np.diag([lmda * penaltyRatioToSV / 4] * X.shape[1] + [lmda] * nSV)
+    L  = np.diag([0] * X.shape[1] + [lmda] * nSV)
+    Lr = np.diag([lmda * penaltyRatioToSV / 4 * 0] * X.shape[1] + [lmda] * nSV)
     # /4 is used because std of the original X0 is only 0.5, beta would then be doubled
     if all(valid):
-        D = inv(XS1XS1 + L) @ XS1.T
+        D  = inv(XS1XS1 + L ) @ XS1.T
+        Dr = inv(XS1XS1 + Lr) @ XS1.T
     else:
         XS1v = XS1[valid, :]
-        D = inv(XS1v.T @ XS1v + L) @ XS1v.T
-    beta = D @ y0[valid]; se = None
-    if get_SVA_pop:
-        yhat = XS1 @ beta
-        yhat[~valid] = np.nan
-        sse = np.nansum((y0-yhat)**2); #   % sum of squared errors
-    #             ssr = np.nansum((yhat-np.nanmean(y0))**2); #   % sum of squared errors
-    #             sst = np.nansum((y0-np.nanmean(y0))**2); #   % sum of squared errors
-    #             Rsq = ssr/sst;
-    #             F = Rsq*dfe/(1-Rsq)/(nparam-1)
-    #             Fs.append(F)
-        mse = sse/dfe;
-        if dfe>0: se = (D[0] @ D[0] * mse) ** 0.5  # http://web.as.uky.edu/statistics/users/pbreheny/764-F11/notes/9-1.pdf
-        else: se = np.nan
-    #             if not all(valid):
-    #                 pF = ss.f.cdf(1/F, dfe, nparam-1)
-    #                 p  = 2*(ss.t.cdf(-abs(beta[0]/se), dfe))
+        D  = inv(XS1v.T @ XS1v + L ) @ XS1v.T
+        Dr = inv(XS1v.T @ XS1v + Lr) @ XS1v.T
+    beta  = D  @ y0[valid]
+    betar = Dr @ y0[valid]
+    yhat = XS1 @ beta
+    yhat[~valid] = np.nan
+    sse = np.nansum((y0-yhat)**2); #   % sum of squared errors
+    mse = sse/dfe;
+    if dfe>0: se = (D[0] @ D[0] * mse) ** 0.5  # http://web.as.uky.edu/statistics/users/pbreheny/764-F11/notes/9-1.pdf
+    else: se = np.nan
+    beta[1:] = betar[1:]
     return beta, se
 
 def cross_group_normalization(data, idxes, controls):
@@ -272,8 +264,8 @@ def calc_ttest_stats(mvns, paired, equalV, need_z = True):
     return dxs, pvals, zs
 
 def ttest(data, controls=None, paired=False, weights=None, equalV=False, 
-          do_SVA=False, nSV=1, penaltyRatioToSV=0, normalize_min_pval=0.1, 
-          get_SVA_pop=True, ridge=False, parallel=True, need_z=True):
+          do_SVA=False, nSV=2, penaltyRatioToSV=0, normalize_min_pval=0.1, 
+          ridge=True, parallel=True, need_z=True):
     idxes = data.columns.levels[0].tolist()
     if controls is None: 
         for _ in range(2): 
@@ -289,7 +281,7 @@ def ttest(data, controls=None, paired=False, weights=None, equalV=False,
     scale_var = 1
     if do_SVA: 
         data, SVApop, scale_var = partial_ridge_sva_residual(data, controls, nSV=nSV, penaltyRatioToSV=penaltyRatioToSV,
-                                          get_SVA_pop=get_SVA_pop, ridge=ridge, parallel=parallel)
+                                          ridge=ridge, parallel=parallel)
         vbs['SVApop'] = SVApop
     mvns = calc_mvns(data, weights, paired, scale_var)
     vbs['mvns'] = mvns
@@ -302,8 +294,8 @@ def ttest(data, controls=None, paired=False, weights=None, equalV=False,
 
 def ascertained_ttest(data, controls=None, paired=False, weights=None, 
                       span=None, equalV=False, pre_neutralize=True, 
-                      do_SVA=False, nSV=1, penaltyRatioToSV=0, normalize_min_pval=0.1, 
-                      get_SVA_pop=True, ridge=False, parallel=True):
+                      do_SVA=False, nSV=2, penaltyRatioToSV=0, normalize_min_pval=0.1, 
+                      ridge=True, parallel=True):
     """
     data is a MultiIndex DataFrame with id (eg. shRNA, gene) as row index and different 
     experimental condition numbers (0, 1, 2, ...) and sample names in tuples as column index.
@@ -336,7 +328,7 @@ def ascertained_ttest(data, controls=None, paired=False, weights=None,
     tps, _, vbs = ttest(data, controls=controls, paired=paired, weights=weights, equalV=equalV, 
                         do_SVA=do_SVA, nSV=nSV, penaltyRatioToSV=penaltyRatioToSV,
                         normalize_min_pval = normalize_min_pval, need_z=False,
-                        get_SVA_pop=get_SVA_pop, ridge=ridge, parallel=parallel)
+                        ridge=ridge, parallel=parallel)
     mvns = vbs['mvns']
     vbs['idxes'] = mvns['idxes']
     mns = [mvns[idx]['n'].mean() for idx in idxes[:len(idxes)-paired]]
