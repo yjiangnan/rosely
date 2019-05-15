@@ -556,7 +556,7 @@ def count_analysis(normdata_list, transform=1., minmean=np.nan, controls=None, s
     dxs = vbs['dx']
     base_pop = 1
     if 'base_pop' in vbs: base_pop = vbs['base_pop'][0]
-    res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, 
+    res = Result(ps, zs, LFDRthr0, data_name=data_name, nbins=nbins, df_fit=df_fit, minr0=minr0, with_plot=with_plot,
                  fine_tune=fine_tune, global_changes=global_changes, neutralize=neutralize, base_pop=base_pop, **kwargs)
     if debug: res.vbs = vbs
     nm = 'dx'
