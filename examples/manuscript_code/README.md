@@ -2,7 +2,7 @@ This folder contains three iPython Notebooks for reproducing the results of manu
 "**High-throughput data analysis by Rosely: a genomic approach to the reproducibility crisis**".  The first two notebooks can be directly run 
 to produce almost identical results in the manuscript except for some small fluctuations due to the use of random numbers. 
 
-The first notebook [test_rosely_with_random_data](manuscript_code/test_rosely_with_random_data.ipynb)
+The first notebook [test_rosely_with_random_data](test_rosely_with_random_data.ipynb)
 contains all tests on the correctness of the functions/equations used by `Rosely` and the statistical properties of `Rosely` on random data.
 It also shows various senarios where *p*-values get heavily biased.
 
