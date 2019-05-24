@@ -1,6 +1,6 @@
 # Rosely
 ### Robust and sensitive tools for high-throughput data analysis
-Rosely implements tools for data normalization, identification of significantly changed genes/transcripts/constructs in microarray, RNA-seq, or shRNA/CRISPR library data, and downstream Gene Ontology and KEGG pathway enrichment analysis. It puts central emphasis on robustness and gives you *p*-values that are tested and can be supported by the data. However, this does not come with the cost of reduced sensitivity. 
+Rosely implements tools for data normalization, identification of significantly changed genes/transcripts/constructs in microarray, RNA-seq, or shRNA/CRISPR library data, and downstream Gene Ontology and KEGG pathway enrichment analysis. It puts central emphasis on robustness and gives you *p*-values that are tested and can be supported by the data. Even better, this does not come with the cost of reduced sensitivity. 
 
 For usage examples, see [Rosely examples](https://github.com/yjiangnan/rosely/tree/master/examples).
 
