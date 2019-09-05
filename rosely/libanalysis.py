@@ -131,21 +131,6 @@ gene1.2,15,25,5,30
         for group in self.data.keys().levels[0]:
             sw = self.sample_weights[group]
             self.presences[group] = (self.data[group]>0).multiply(sw).sum(axis=1)
-#         if get_shared_presences:
-#             for group in self.data:
-#                 subgroup = ''
-#                 if len(group.split('.'))>1: subgroup = group.split('.')[-1]
-#                 self.shared_presences[subgroup] = {}
-#                 for g in self.data:
-#                     sg = ''
-#                     if len(g.split('.'))>1: sg = g.split('.')
-#                     if g == group or subgroup != sg: continue
-#                     for seqid in self.seqids:
-#                         self.shared_presences[sg][seqid] = 0; th = self.threshold[seqid]
-#                         for spl in self.data[group]:
-#                             sw = min(self.sample_weights[group][spl], self.sample_weights[g][spl])
-#                             self.shared_presences[sg][seqid] += (self.data[group][spl][seqid] > th and
-#                                                               self.data[g    ][spl][seqid] > th) * sw
         self.nRefs = nRefs = {}
         nby = normalize_by
         if nby == 'median' or 'quantile' in nby: nby = list(self.seqids)
@@ -231,13 +216,15 @@ def correlation_heatmap(data, groups='all', samples='all', vmin=0.8, transform='
                     by_residual=False, with_plot=True, paired=False, **kwargs):
     try: 
         if groups == 'all': 
-            groups = sorted(data.keys().levels[0])
+            try: groups = sorted(data.keys().levels[0])
+            except: groups = data.keys()
         if samples == 'all': group_samples = [(g, s) for g in groups for s in data[g]]
         elif len(groups) == 1: group_samples = list(zip(groups * len(samples), samples))
         else: group_samples = list(zip(*[[groups[i]] * len(samples[i]) for i in range(len(groups))],
                                   [s for spl in samples for s in spl]))
     except: group_samples = sorted(data.keys())
-    data = pd.DataFrame({gs:data[gs] for gs in group_samples})
+    try: data = pd.DataFrame({gs:data[gs] for gs in group_samples})
+    except: data = pd.DataFrame({(g,s):data[g][s] for g in groups for s in data[g]})
     if transform == 'log': 
         data = np.log(data)
         data[data==-np.Inf] = np.nan
@@ -298,8 +285,8 @@ class Result:
         self.results['Controlled p-value'] = self.nps
         self.results = pd.DataFrame(self.results).sort_values(by='Controlled p-value')
         
-    def update_gene_ids(self, species='mouse'):
-        ids = getGeneId(self.results.index, species=species)
+    def update_gene_ids(self, species='mouse', taxid=None):
+        ids = getGeneId(self.results.index, species=species, taxid=taxid)
         rr = self.results.copy()
         rr['geneid'] = ids['geneid']
         rr['symbol'] = ids['symbol']

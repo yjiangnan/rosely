@@ -8,7 +8,7 @@ integral_ext = Extension('rosely._integral',
 setup(
     name='rosely',
     description='Robust and sensitive tools for high-throughput data analysis',
-    version='1.2.2',
+    version='1.3.0',
     packages=['rosely',],
     package_dir={'rosely': '.'},
     package_data={'rosely':['HelveticaCY.dfont']},

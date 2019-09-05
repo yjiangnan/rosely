@@ -14,9 +14,32 @@ from rosely import *
 from collections import OrderedDict
 results = {'Mouse':{}, 'Human':{}}
 
+cr = CountReads('/Users/jiangnan/Documents/rudolphLab/mouseTransplant/BJ_hm42ms_pool_S51_R1_001.results.txt',
+               group_sample_sep='.')
+cr.normalize_data(normalize_by='Luciferase', normcutoff=1)
+print('Library size:', len(cr.seqids))
+print('Total successfully mapped reads:', cr.data.sum().sum())
+groups = list(cr.data.keys().levels[0])
+groups
+
+
+hsc = CountReads('~/Downloads/GSE47817_deg.m04_hsc_vs_m24_hsc-2.txt')
+hsc.normalize_data(normalize_by='quantile5', normcutoff=10)
+
+
+cr = CountReads('~/Downloads/SrHt_expressionMatrix.txt', sep='\t', igroup=1, 
+                group_sample_sep='ical', has_groups=True)
+cr.normalize_data(normalize_by='quantile5', normcutoff=1)
+print('Library size:', len(cr.seqids))
+groups = list(cr.presences.keys())
+print('groups:', groups)
+
+# del cr.normdata['class']['15']
+# del cr.normdata['nonclass']['06']
+# cr.correlation_heatmap(vmin=0.5, paired=True);
+# 
 with open('/Users/jiangnan/Documents/rudolphLab/mouseTransplant/group_bc_target.dat','rb') as fl: data, shRNAs = pickle.load(fl)
 shRNAs.remove('Luciferase')
-
 
 controls = []
 for shRNA in shRNAs:

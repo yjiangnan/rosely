@@ -273,10 +273,10 @@ def ttest(data, controls=None, paired=False, weights=None, equalV=False,
                                                        min_pval=normalize_min_pval, 
                                                        weights=weights, paired=paired)
     else:
-        mcs = data.loc[controls].mean(axis=1).dropna()
-        smc = sorted(mcs.values); l = len(smc)
-        mid_controls = mcs[(mcs >= smc[l//5]) & (mcs < smc[l//5*4])].index
-        data = cross_group_normalization(data, idxes, mid_controls)
+#         mcs = data.loc[controls].mean(axis=1).dropna()
+#         smc = sorted(mcs.values); l = len(smc)
+#         mid_controls = mcs[(mcs >= smc[l//10]) & (mcs < smc[l//10*9])].index
+        data = cross_group_normalization(data, idxes, controls)
     vbs = {}
     scale_var = 1
     if do_SVA: 
