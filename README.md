@@ -99,6 +99,14 @@ If you have pip3 installed (for python3), install them by pip3 can be done as:
 
     sudo pip3 install scipy pandas matplotlib sklearn psutil mygene biopython Pillow
     
+### iPython notebook and Jupyter
+All the examples here are iPython notebooks and it is strongly recommended that you also use iPython notebooks to keep the code, documentation and results together for good scientific practice purposes and reproducibility. To instead Jupyter, go to https://jupyter.org/.
+
+Then, in your terminal, you can go (`cd`) to the folder of your data/notebooks, and start by running
+```
+jupyter notebook --script
+```
+to automatically open the folder in the browser and then create new notebooks or open existing notebooks.
 
 ### Install without root privileges
 If you do not have root privileges, you can try using virtual environment [JuNest](https://github.com/fsquillace/junest) and build `python3`, `python-pip`, `git`, `tk` and `gcc-fortran` inside it:
