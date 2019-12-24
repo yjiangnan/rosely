@@ -97,7 +97,7 @@ Additionally, `rosely` depends on some python packages.
 
 If you have pip3 installed (for python3), install them by pip3 can be done as:
 
-    sudo pip3 install scipy pandas matplotlib sklearn psutil mygene biopython Pillow
+    sudo pip3 install scipy pandas matplotlib sklearn psutil mygene biopython goatools Pillow
     
 ### iPython notebook and Jupyter
 All the examples here are iPython notebooks and it is strongly recommended that you also use iPython notebooks to keep the code, documentation and results together for good scientific practice purposes and reproducibility. To instead Jupyter, go to https://jupyter.org/.
