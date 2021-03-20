@@ -9,7 +9,7 @@ Created on Aug 9, 2017
 '''
 
 
-import time
+import time, warnings
 import scipy.stats as ss, pandas as pd
 from pylab import *
 from scipy.optimize import curve_fit, minimize
